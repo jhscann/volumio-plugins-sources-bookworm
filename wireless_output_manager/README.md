@@ -8,7 +8,7 @@ The plugin provides:
 
 - bounded Bluetooth discovery, pairing, trust, connect, disconnect and forget operations;
 - audio-profile-aware device ordering when BlueZ exposes UUIDs;
-- a persisted preferred speaker and a conservative 45-second reconnect loop;
+- a persisted preferred speaker and a bounded 15-second reconnect monitor;
 - restoration of the previously selected Volumio hardware path when Bluetooth reconnect fails;
 - read-only environment, Bluetooth, ALSA/audio-stack and MPD diagnostics;
 - a guarded, plugin-owned BlueALSA PCM contribution when BlueALSA is already installed;
@@ -41,7 +41,7 @@ Pairing modes that require a PIN or confirmation agent may need to be completed 
 
 ## Reconnect and fallback
 
-When enabled, the plugin checks the preferred device after startup and every 45 seconds. It never spins in a tight loop. A missing or powered-off speaker is reported as unavailable and does not prevent plugin startup.
+When enabled, the plugin checks the preferred device after startup and every 15 seconds. It never spins in a tight loop or overlaps reconnect attempts. A missing or powered-off speaker is reported as unavailable and does not prevent plugin startup.
 
 With **Previous output** selected, a failed Bluetooth reconnect removes only the plugin-owned ALSA contribution, restoring Volumio's already-selected hardware path. When the preferred speaker reconnects, the plugin recreates its guarded contribution. **None** leaves Bluetooth routing in place. HDMI fallback remains unavailable because selecting a different hardware card would require unverified controller behavior.
 

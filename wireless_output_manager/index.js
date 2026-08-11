@@ -77,7 +77,7 @@ WirelessOutputManager.prototype._scheduleReconnect = function (delayMs) {
   self._clearReconnect();
   if (!self.config.get('enabled') || !self.config.get('autoReconnect')) return;
   self.reconnectTimer = setTimeout(function () {
-    self._reconnectPreferred().finally(function () { self._scheduleReconnect(45000); });
+    self._reconnectPreferred().finally(function () { self._scheduleReconnect(15000); });
   }, delayMs);
   if (self.reconnectTimer.unref) self.reconnectTimer.unref();
 };
