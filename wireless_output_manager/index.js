@@ -197,7 +197,13 @@ WirelessOutputManager.prototype.scanDevices = function () {
 };
 WirelessOutputManager.prototype._selected = function (data) {
   var selected = data && (data.device || data.preferredDevice || data);
-  return selected && selected.value ? selected.value : (selected || this.config.get('preferredDeviceMac'));
+  if (Array.isArray(selected)) selected = selected[0];
+  if (selected && typeof selected === 'object') selected = selected.value;
+  selected = String(selected || '').toUpperCase();
+  if (BluetoothAdapter.MAC_RE.test(selected)) return selected;
+
+  var preferred = String(this.config.get('preferredDeviceMac') || '').toUpperCase();
+  return BluetoothAdapter.MAC_RE.test(preferred) ? preferred : selected;
 };
 WirelessOutputManager.prototype.pairDevice = function (data) {
   var id = this._selected(data); return this._action('Pairing ' + id, this.bluetooth.pair.bind(this.bluetooth, id), 'Device paired');

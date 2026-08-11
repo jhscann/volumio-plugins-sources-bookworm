@@ -23,11 +23,11 @@
         {"id": "startBluetooth", "element": "button", "label": "START_BLUETOOTH", "onClick": {"type": "plugin", "endpoint": "system_hardware/wireless_output_manager", "method": "startBluetooth", "data": []}},
         {"id": "stopBluetooth", "element": "button", "label": "STOP_BLUETOOTH", "onClick": {"type": "plugin", "endpoint": "system_hardware/wireless_output_manager", "method": "stopBluetooth", "data": []}},
         {"id": "scanDevices", "element": "button", "label": "SCAN_DEVICES", "description": "SCAN_NOTE", "onClick": {"type": "plugin", "endpoint": "system_hardware/wireless_output_manager", "method": "scanDevices", "data": []}},
-        {"id": "pairDevice", "element": "button", "label": "PAIR", "onClick": {"type": "plugin", "endpoint": "system_hardware/wireless_output_manager", "method": "pairDevice", "data": ["preferredDevice"]}},
-        {"id": "trustDevice", "element": "button", "label": "TRUST", "onClick": {"type": "plugin", "endpoint": "system_hardware/wireless_output_manager", "method": "trustDevice", "data": ["preferredDevice"]}},
-        {"id": "connectDevice", "element": "button", "label": "CONNECT", "onClick": {"type": "plugin", "endpoint": "system_hardware/wireless_output_manager", "method": "connectDevice", "data": ["preferredDevice"]}},
-        {"id": "disconnectDevice", "element": "button", "label": "DISCONNECT", "onClick": {"type": "plugin", "endpoint": "system_hardware/wireless_output_manager", "method": "disconnectDevice", "data": ["preferredDevice"]}},
-        {"id": "forgetDevice", "element": "button", "label": "FORGET", "onClick": {"type": "plugin", "endpoint": "system_hardware/wireless_output_manager", "method": "forgetDevice", "data": ["preferredDevice"]}},
+        {"id": "pairDevice", "element": "button", "label": "PAIR", "onClick": {"type": "plugin", "endpoint": "system_hardware/wireless_output_manager", "method": "pairDevice", "data": []}},
+        {"id": "trustDevice", "element": "button", "label": "TRUST", "onClick": {"type": "plugin", "endpoint": "system_hardware/wireless_output_manager", "method": "trustDevice", "data": []}},
+        {"id": "connectDevice", "element": "button", "label": "CONNECT", "onClick": {"type": "plugin", "endpoint": "system_hardware/wireless_output_manager", "method": "connectDevice", "data": []}},
+        {"id": "disconnectDevice", "element": "button", "label": "DISCONNECT", "onClick": {"type": "plugin", "endpoint": "system_hardware/wireless_output_manager", "method": "disconnectDevice", "data": []}},
+        {"id": "forgetDevice", "element": "button", "label": "FORGET", "onClick": {"type": "plugin", "endpoint": "system_hardware/wireless_output_manager", "method": "forgetDevice", "data": []}},
         {"id": "createOutput", "element": "button", "label": "CREATE_OUTPUT", "description": "CREATE_OUTPUT_NOTE", "onClick": {"type": "plugin", "endpoint": "system_hardware/wireless_output_manager", "method": "createBluetoothOutput", "data": []}},
         {"id": "connectionStatus", "element": "textarea", "label": "CONNECTION_STATUS", "value": ""}
       ]
