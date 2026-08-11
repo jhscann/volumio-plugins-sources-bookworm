@@ -1,0 +1,31 @@
+{
+  "name": "wireless_output_manager",
+  "version": "0.1.0",
+  "description": "Manage wireless audio outputs in Volumio 4, starting with Bluetooth speakers",
+  "main": "index.js",
+  "scripts": {
+    "test": "node test/run.js"
+  },
+  "author": "John Cann",
+  "license": "MIT",
+  "repository": "https://github.com/jhscann/volumio-plugins-sources-bookworm",
+  "volumio_info": {
+    "prettyName": "Wireless Output Manager",
+    "icon": "fa-bluetooth-b",
+    "plugin_type": "system_hardware",
+    "architectures": ["amd64", "armhf"],
+    "os": ["bookworm"],
+    "details": "Connect Volumio to an external Bluetooth speaker using the audio stack already present on the device.",
+    "changelog": "Initial Bluetooth output, diagnostics, reconnect and guarded BlueALSA integration.",
+    "has_alsa_contribution": true
+  },
+  "engines": {
+    "node": ">=20",
+    "volumio": ">=4"
+  },
+  "dependencies": {
+    "fs-extra": "^11.2.0",
+    "kew": "^0.7.0",
+    "v-conf": "^1.4.2"
+  }
+}

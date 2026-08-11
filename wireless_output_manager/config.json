@@ -1,0 +1,10 @@
+{
+  "enabled": {"type": "boolean", "value": false},
+  "activeBackend": {"type": "string", "value": "bluetooth"},
+  "autoReconnect": {"type": "boolean", "value": true},
+  "preferredDeviceMac": {"type": "string", "value": ""},
+  "preferredDeviceName": {"type": "string", "value": ""},
+  "fallbackOutput": {"type": "string", "value": "previous"},
+  "volumeMode": {"type": "string", "value": "software"},
+  "debugLogging": {"type": "boolean", "value": false}
+}
