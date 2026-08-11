@@ -159,8 +159,19 @@ WirelessOutputManager.prototype.getUIConfig = function () {
     set('sections[0].content[3]', 'value', { value: self.config.get('volumeMode'), label: self.config.get('volumeMode') });
     set('sections[0].content[4]', 'value', Boolean(self.config.get('debugLogging')));
     var preferred = self.config.get('preferredDeviceMac') || '';
-    set('sections[1].content[0]', 'value', { value: preferred, label: self.config.get('preferredDeviceName') || 'No preferred device' });
+    var preferredName = self.config.get('preferredDeviceName') || 'No preferred device';
+    set('sections[1].content[0]', 'value', { value: preferred, label: preferredName });
+    // A newly loaded plugin has no in-memory scan results. Keep the persisted
+    // selection in the option list so Volumio does not discard or hide a
+    // select control whose current value has no matching option.
+    if (preferred) {
+      self.configManager.pushUIConfigParam(ui, 'sections[1].content[0].options', {
+        value: preferred,
+        label: preferredName
+      });
+    }
     self.devices.forEach(function (device) {
+      if (device.id === preferred) return;
       self.configManager.pushUIConfigParam(ui, 'sections[1].content[0].options', {
         value: device.id,
         label: device.name + (device.audioCapable === true ? ' (audio)' : '')
@@ -189,11 +200,14 @@ WirelessOutputManager.prototype.saveSettings = function (data) {
 };
 
 WirelessOutputManager.prototype.savePreferredDevice = function (data) {
-  var selected = data.preferredDevice || data;
-  var mac = selected.value || selected;
+  var selected = data && data.preferredDevice !== undefined ? data.preferredDevice : data;
+  if (Array.isArray(selected)) selected = selected[0];
+  var mac = selected && typeof selected === 'object' ? selected.value : selected;
+  mac = String(mac || '').toUpperCase();
   var match = this.devices.find(function (device) { return device.id === mac; });
-  this.config.set('preferredDeviceMac', mac || '');
-  this.config.set('preferredDeviceName', match ? match.name : (selected.label || ''));
+  var submittedLabel = selected && typeof selected === 'object' ? selected.label : '';
+  this.config.set('preferredDeviceMac', mac);
+  this.config.set('preferredDeviceName', match ? match.name : submittedLabel);
   this._toast('success', 'Preferred device saved');
   return libQ.resolve();
 };

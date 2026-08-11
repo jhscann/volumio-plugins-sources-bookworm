@@ -40,6 +40,16 @@ async function main() {
   var startPromise = plugin.onStart();
   assert.strictEqual(typeof startPromise.fail, 'function', 'onStart must return a Volumio-compatible Kew promise');
   await startPromise;
+
+  var saved = {};
+  plugin.devices = [{ id: 'C4:30:18:EA:9D:EC', name: 'JBL PartyBox 100' }];
+  plugin.config = {
+    set: function (key, value) { saved[key] = value; }
+  };
+  plugin._toast = function () {};
+  await plugin.savePreferredDevice({ preferredDevice: [{ value: 'c4:30:18:ea:9d:ec', label: 'JBL PartyBox 100 (audio)' }] });
+  assert.strictEqual(saved.preferredDeviceMac, 'C4:30:18:EA:9D:EC', 'preferred-device arrays must save a plain normalized MAC');
+  assert.strictEqual(saved.preferredDeviceName, 'JBL PartyBox 100');
   console.log('All tests passed');
 }
 
