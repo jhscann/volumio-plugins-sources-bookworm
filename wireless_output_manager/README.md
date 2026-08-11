@@ -9,7 +9,7 @@ The plugin provides:
 - bounded Bluetooth discovery, pairing, trust, connect, disconnect and forget operations;
 - audio-profile-aware device ordering when BlueZ exposes UUIDs;
 - a persisted preferred speaker and a bounded 15-second reconnect monitor;
-- restoration of the previously selected Volumio hardware path when Bluetooth reconnect fails;
+- explicit, manual switching between Bluetooth and the selected Volumio hardware output;
 - read-only environment, Bluetooth, ALSA/audio-stack and MPD diagnostics;
 - a guarded, plugin-owned BlueALSA PCM contribution when BlueALSA is already installed;
 - verification and rollback if the ALSA contribution cannot be exposed;
@@ -39,11 +39,11 @@ The installer checks required base-system commands and reports the existing audi
 
 Pairing modes that require a PIN or confirmation agent may need to be completed with `bluetoothctl` over SSH in this initial version.
 
-## Reconnect and fallback
+## Reconnect and output selection
 
 When enabled, the plugin checks the preferred device after startup and every 15 seconds. It never spins in a tight loop or overlaps reconnect attempts. A missing or powered-off speaker is reported as unavailable and does not prevent plugin startup.
 
-With **Previous output** selected, a failed Bluetooth reconnect removes only the plugin-owned ALSA contribution, restoring Volumio's already-selected hardware path. When the preferred speaker reconnects, the plugin recreates its guarded contribution. **None** leaves Bluetooth routing in place. HDMI fallback remains unavailable because selecting a different hardware card would require unverified controller behavior.
+Routing is deliberately manual. Stop playback, then choose **Use wireless output** to route Volumio through the connected preferred speaker, or **Use default output** to remove the plugin contribution and return to the hardware device already selected in Playback Options. The plugin rejects route changes unless playback is stopped. Auto-reconnect reconnects Bluetooth only; it never changes the selected audio route.
 
 ## Volume
 

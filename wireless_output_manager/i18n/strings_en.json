@@ -29,5 +29,8 @@
   "CREATE_OUTPUT": "Create BlueALSA output",
   "CREATE_OUTPUT_NOTE": "Available only when device diagnostics confirm BlueALSA. This never installs a competing audio stack or edits MPD directly.",
   "REMOVE_OUTPUT": "Remove plugin audio output",
+  "USE_WIRELESS_OUTPUT": "Use wireless output",
+  "USE_DEFAULT_OUTPUT": "Use default output",
+  "MANUAL_OUTPUT_NOTE": "Stop playback before switching output. Default output returns to the device already selected in Playback Options.",
   "REFRESH_STATUS": "Refresh status"
 }
