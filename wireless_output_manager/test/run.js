@@ -33,6 +33,13 @@ async function main() {
   await plugin._stopPlaybackForRouting();
   assert.strictEqual(stopCalls, 1, 'manual route switch must stop playback');
   assert(Date.now() - started >= 900, 'manual route switch must allow MPD to release the PCM');
+
+  plugin.log = { info: function () {} };
+  plugin.outputManager = { getStatus: function () { return Promise.resolve({ configured: false }); } };
+  plugin.config = { get: function () { return false; }, set: function () {} };
+  var startPromise = plugin.onStart();
+  assert.strictEqual(typeof startPromise.fail, 'function', 'onStart must return a Volumio-compatible Kew promise');
+  await startPromise;
   console.log('All tests passed');
 }
 

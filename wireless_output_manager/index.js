@@ -42,7 +42,10 @@ WirelessOutputManager.prototype.onVolumioStart = function () {
 WirelessOutputManager.prototype.onStart = function () {
   var self = this;
   self.log.info('Starting');
-  return Promise.resolve(self.outputManager.getStatus()).then(function (status) {
+  // Volumio 4 validates lifecycle methods using Kew's promise interface.
+  // Assimilate the native promise returned by OutputManager into a Kew
+  // promise so plugin enablement is not incorrectly marked as failed.
+  return libQ.resolve(self.outputManager.getStatus()).then(function (status) {
     // Migrate installations created before outputEnabled was persisted.
     if (status.configured && self.config.get('outputEnabled') !== true) {
       self.config.set('outputEnabled', true);
