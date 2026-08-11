@@ -42,8 +42,13 @@ WirelessOutputManager.prototype.onVolumioStart = function () {
 WirelessOutputManager.prototype.onStart = function () {
   var self = this;
   self.log.info('Starting');
-  if (self.config.get('enabled') && self.config.get('autoReconnect')) self._scheduleReconnect(5000);
-  return libQ.resolve();
+  return Promise.resolve(self.outputManager.getStatus()).then(function (status) {
+    // Migrate installations created before outputEnabled was persisted.
+    if (status.configured && self.config.get('outputEnabled') !== true) {
+      self.config.set('outputEnabled', true);
+    }
+    if (self.config.get('enabled') && self.config.get('autoReconnect')) self._scheduleReconnect(5000);
+  });
 };
 
 WirelessOutputManager.prototype.onStop = function () {
@@ -87,13 +92,37 @@ WirelessOutputManager.prototype._reconnectPreferred = async function () {
       this.btLog.info('Reconnecting preferred device ' + mac);
       await this.bluetooth.connect(mac);
     }
+    if (this.config.get('outputEnabled')) {
+      var outputStatus = await this.outputManager.getStatus();
+      if (!outputStatus.configured) {
+        this.log.info('Restoring Bluetooth routing after reconnect');
+        await this.outputManager.createOutput(mac);
+      }
+    }
     this.lastError = '';
   } catch (error) {
     this.lastError = 'Preferred speaker is unavailable: ' + error.message;
     this.btLog.warn(this.lastError);
+    await this._activateFallback().catch(function (fallbackError) {
+      this.log.error('Fallback failed: ' + fallbackError.message);
+    }.bind(this));
   } finally {
     this.reconnectBusy = false;
   }
+};
+
+WirelessOutputManager.prototype._activateFallback = async function () {
+  if (!this.config.get('outputEnabled')) return;
+  var fallback = this.config.get('fallbackOutput');
+  if (fallback === 'none') return;
+  if (fallback === 'hdmi') {
+    this.log.warn('HDMI fallback requires a verified Volumio output-selection API; leaving routing unchanged');
+    return;
+  }
+  var status = await this.outputManager.getStatus();
+  if (!status.configured) return;
+  this.log.warn('Bluetooth is unavailable; restoring the existing Volumio output path');
+  await this.outputManager.removeOutput();
 };
 
 WirelessOutputManager.prototype._toast = function (level, message) {
@@ -238,16 +267,27 @@ WirelessOutputManager.prototype.forgetDevice = function (data) {
 WirelessOutputManager.prototype.createBluetoothOutput = function () {
   var self = this;
   return self._action('Creating guarded BlueALSA output', function () {
-    return self.outputManager.createOutput(self.config.get('preferredDeviceMac'));
+    return self.outputManager.createOutput(self.config.get('preferredDeviceMac')).then(function (result) {
+      self.config.set('outputEnabled', true);
+      return result;
+    });
   }, 'Bluetooth ALSA output created');
 };
 WirelessOutputManager.prototype.removeBluetoothOutput = function () {
-  return this._action('Removing Bluetooth output', this.outputManager.removeOutput.bind(this.outputManager), 'Bluetooth ALSA output removed');
+  var self = this;
+  return self._action('Removing Bluetooth output', function () {
+    return self.outputManager.removeOutput().then(function (result) {
+      self.config.set('outputEnabled', false);
+      return result;
+    });
+  }, 'Bluetooth ALSA output removed');
 };
 
 WirelessOutputManager.prototype.runDiagnostics = function () {
   var self = this;
   return self.diagnostics.all().then(async function (result) {
+    result.wirelessOutput = await self.outputManager.getStatus();
+    result.preferredDevice = await self.bluetooth.getStatus(self.config.get('preferredDeviceMac'));
     self.lastDiagnostics = result;
     await self.refreshUI();
     self._toast('success', 'Diagnostics complete');

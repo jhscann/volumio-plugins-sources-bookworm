@@ -96,7 +96,20 @@ BluetoothAdapter.prototype.listPairedDevices = async function () {
   return this._enrich(this._parseDeviceLines(result.stdout));
 };
 BluetoothAdapter.prototype._legacyPaired = function () { return this._ctl(['paired-devices']); };
-BluetoothAdapter.prototype.pair = function (id) { return this._ctl(['pair', this._mac(id)], 60000); };
+BluetoothAdapter.prototype.pair = async function (id) {
+  var mac = this._mac(id);
+  var existing = await this.getDeviceInfo(mac).catch(function () { return null; });
+  if (existing && existing.paired) return { stdout: 'Device is already paired', exitCode: 0 };
+  try {
+    return await this._ctl(['pair', mac], 60000);
+  } catch (error) {
+    var after = await this.getDeviceInfo(mac).catch(function () { return null; });
+    if (after && after.paired) return { stdout: 'Pairing completed', exitCode: 0 };
+    var detail = error.result && (error.result.stderr || error.result.stdout);
+    if (detail) error.message += ': ' + detail;
+    throw error;
+  }
+};
 BluetoothAdapter.prototype.trust = function (id) { return this._ctl(['trust', this._mac(id)]); };
 BluetoothAdapter.prototype.connect = function (id) { return this._ctl(['connect', this._mac(id)], 30000); };
 BluetoothAdapter.prototype.disconnect = function (id) { return this._ctl(['disconnect', this._mac(id)], 20000); };

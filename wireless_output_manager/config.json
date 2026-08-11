@@ -4,6 +4,7 @@
   "autoReconnect": {"type": "boolean", "value": true},
   "preferredDeviceMac": {"type": "string", "value": ""},
   "preferredDeviceName": {"type": "string", "value": ""},
+  "outputEnabled": {"type": "boolean", "value": false},
   "fallbackOutput": {"type": "string", "value": "previous"},
   "volumeMode": {"type": "string", "value": "software"},
   "debugLogging": {"type": "boolean", "value": false}
