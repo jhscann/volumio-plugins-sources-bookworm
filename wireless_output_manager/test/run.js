@@ -3,6 +3,7 @@
 var assert = require('assert');
 var BluetoothAdapter = require('../lib/adapters/bluetooth');
 var CommandRunner = require('../lib/commandRunner').CommandRunner;
+var WirelessOutputManager = require('../index');
 
 async function main() {
   var adapter = new BluetoothAdapter({
@@ -21,6 +22,17 @@ async function main() {
   try { await runner.run(process.execPath, ['-e', 'setTimeout(function(){}, 5000)'], { timeoutMs: 20 }); }
   catch (error) { rejected = error.result && error.result.timedOut; }
   assert.strictEqual(rejected, true, 'command runner must reject timed-out commands');
+
+  var stopCalls = 0;
+  var plugin = new WirelessOutputManager({
+    coreCommand: { volumioStop: function () { stopCalls += 1; } },
+    logger: {},
+    configManager: {}
+  });
+  var started = Date.now();
+  await plugin._stopPlaybackForRouting();
+  assert.strictEqual(stopCalls, 1, 'manual route switch must stop playback');
+  assert(Date.now() - started >= 900, 'manual route switch must allow MPD to release the PCM');
   console.log('All tests passed');
 }
 

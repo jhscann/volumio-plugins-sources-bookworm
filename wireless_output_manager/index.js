@@ -72,16 +72,15 @@ WirelessOutputManager.prototype._clearReconnect = function () {
   this.reconnectTimer = null;
 };
 
-WirelessOutputManager.prototype._assertPlaybackStopped = function () {
-  var state;
+WirelessOutputManager.prototype._stopPlaybackForRouting = function () {
   try {
-    state = this.commandRouter.volumioGetState();
+    // Volumio 4's stop command is fire-and-forget. Do not chain its return
+    // value; give MPD a short, bounded interval to release the current PCM.
+    this.commandRouter.volumioStop();
   } catch (error) {
-    throw new Error('Unable to check playback state. Stop playback and try again.');
+    return Promise.reject(new Error('Unable to stop playback before switching output: ' + error.message));
   }
-  if (!state || state.status !== 'stop') {
-    throw new Error('Stop playback before switching between wireless and default output.');
-  }
+  return new Promise(function (resolve) { setTimeout(resolve, 1000); });
 };
 
 WirelessOutputManager.prototype._scheduleReconnect = function (delayMs) {
@@ -254,8 +253,9 @@ WirelessOutputManager.prototype.forgetDevice = function (data) {
 WirelessOutputManager.prototype.createBluetoothOutput = function () {
   var self = this;
   return self._action('Creating guarded BlueALSA output', function () {
-    self._assertPlaybackStopped();
-    return self.outputManager.createOutput(self.config.get('preferredDeviceMac')).then(function (result) {
+    return self._stopPlaybackForRouting().then(function () {
+      return self.outputManager.createOutput(self.config.get('preferredDeviceMac'));
+    }).then(function (result) {
       self.config.set('outputEnabled', true);
       return result;
     });
@@ -264,8 +264,9 @@ WirelessOutputManager.prototype.createBluetoothOutput = function () {
 WirelessOutputManager.prototype.removeBluetoothOutput = function () {
   var self = this;
   return self._action('Removing Bluetooth output', function () {
-    self._assertPlaybackStopped();
-    return self.outputManager.removeOutput().then(function (result) {
+    return self._stopPlaybackForRouting().then(function () {
+      return self.outputManager.removeOutput();
+    }).then(function (result) {
       self.config.set('outputEnabled', false);
       return result;
     });

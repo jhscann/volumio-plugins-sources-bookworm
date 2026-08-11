@@ -31,6 +31,6 @@
   "REMOVE_OUTPUT": "Remove plugin audio output",
   "USE_WIRELESS_OUTPUT": "Use wireless output",
   "USE_DEFAULT_OUTPUT": "Use default output",
-  "MANUAL_OUTPUT_NOTE": "Stop playback before switching output. Default output returns to the device already selected in Playback Options.",
+  "MANUAL_OUTPUT_NOTE": "Switching output stops playback. Press Play when the switch completes. Default output returns to the device already selected in Playback Options.",
   "REFRESH_STATUS": "Refresh status"
 }
