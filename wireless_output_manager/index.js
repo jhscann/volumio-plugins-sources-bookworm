@@ -21,6 +21,7 @@ function WirelessOutputManager(context) {
   this.lastError = '';
   this.lastDiagnostics = null;
   this.devices = [];
+  this.changingSpeaker = false;
 }
 
 WirelessOutputManager.prototype.onVolumioStart = function () {
@@ -84,6 +85,13 @@ WirelessOutputManager.prototype._stopPlaybackForRouting = function () {
     return Promise.reject(new Error('Unable to stop playback before switching output: ' + error.message));
   }
   return new Promise(function (resolve) { setTimeout(resolve, 1000); });
+};
+
+WirelessOutputManager.prototype._returnToDefaultIfWireless = async function () {
+  if (!this.config.get('outputEnabled')) return;
+  await this._stopPlaybackForRouting();
+  await this.outputManager.removeOutput();
+  this.config.set('outputEnabled', false);
 };
 
 WirelessOutputManager.prototype._scheduleReconnect = function (delayMs) {
@@ -180,10 +188,19 @@ WirelessOutputManager.prototype.getUIConfig = function () {
     if (connected) set('sections[0]', 'description', preferredName + ' is paired and connected.');
     else if (paired) set('sections[0]', 'description', preferredName + ' is paired but currently disconnected.');
     else set('sections[0]', 'description', 'Put your speaker in pairing mode, find it, then choose Pair & connect.');
-    var volumeAdvice = ' Volume tip: with Mixer Type set to Hardware, Bluetooth is effectively sent at 100% and Volumio volume applies only to the DAC. Choose Software to control Bluetooth volume from Volumio.';
-    set('sections[1]', 'description', (self.config.get('outputEnabled')
-      ? 'Current destination: ' + preferredName + '. Switching stops playback; press Play afterward.'
-      : 'Current destination: the default device selected in Volumio Playback Options.') + volumeAdvice);
+    var outputEnabled = Boolean(self.config.get('outputEnabled'));
+    var changingSpeaker = Boolean(self.changingSpeaker);
+    set('sections[0].content[0]', 'label', preferred ? 'Find another speaker' : 'Find Bluetooth speakers');
+    set('sections[0].content[1]', 'hidden', Boolean(preferred) && !changingSpeaker);
+    set('sections[0].content[2]', 'hidden', Boolean(preferred) && !changingSpeaker);
+    set('sections[1].content[0]', 'hidden', outputEnabled || !connected);
+    set('sections[1].content[1]', 'hidden', !outputEnabled);
+    set('sections[1].content[0]', 'label', 'Switch to ' + preferredName);
+    set('sections[1].content[1]', 'label', 'Switch to default audio output');
+    set('sections[1]', 'description', outputEnabled
+      ? 'Music is routed to ' + preferredName + '. Press Play after switching. With Mixer Type set to Hardware, Bluetooth is effectively sent at 100%; choose Software to control Bluetooth volume from Volumio.'
+      : 'Music is routed to the default device selected in Volumio Playback Options.');
+    set('sections[2]', 'hidden', !preferred);
     set('sections[2].content[0]', 'hidden', !preferred || connected);
     set('sections[2].content[1]', 'hidden', !connected);
     set('sections[2].content[2]', 'hidden', !preferred);
@@ -224,6 +241,7 @@ WirelessOutputManager.prototype.pairAndConnectDevice = function (data) {
     self.config.set('preferredDeviceMac', id);
     self.config.set('preferredDeviceName', info.name || id);
     self.config.set('enabled', true);
+    self.changingSpeaker = false;
     if (self.config.get('autoReconnect')) self._scheduleReconnect(15000);
     await self.refreshUI();
     return info;
@@ -251,6 +269,7 @@ WirelessOutputManager.prototype.stopBluetooth = function () {
 };
 WirelessOutputManager.prototype.scanDevices = function () {
   var self = this;
+  self.changingSpeaker = true;
   return self._action('Scanning for devices', function () {
     return self.bluetooth.scan(12).then(function (result) {
       self.devices = result.devices;
@@ -289,6 +308,7 @@ WirelessOutputManager.prototype.connectDevice = function (data) {
 WirelessOutputManager.prototype.disconnectDevice = function (data) {
   var self = this; var id = self._selected(data);
   return self._action('Disconnecting ' + id, async function () {
+    await self._returnToDefaultIfWireless();
     var result = await self.bluetooth.disconnect(id);
     await self.refreshUI();
     return result;
@@ -297,10 +317,12 @@ WirelessOutputManager.prototype.disconnectDevice = function (data) {
 WirelessOutputManager.prototype.forgetDevice = function (data) {
   var self = this; var id = self._selected(data);
   return self._action('Forgetting ' + id, async function () {
+    await self._returnToDefaultIfWireless();
     var result = await self.bluetooth.forget(id);
     if (self.config.get('preferredDeviceMac') === id) {
       self.config.set('preferredDeviceMac', ''); self.config.set('preferredDeviceName', '');
     }
+    self.changingSpeaker = false;
     await self.refreshUI();
     return result;
   }, 'Speaker forgotten');

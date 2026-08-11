@@ -39,6 +39,8 @@ The installer checks required base-system commands and reports the existing audi
 
 Previously paired speakers do not need pairing mode. Use **Reconnect speaker** instead. **Forget speaker** removes the BlueZ pairing, so pairing mode is required the next time it is added.
 
+After onboarding, the setup controls collapse to a connected-speaker summary and **Find another speaker**. The page shows only actions relevant to the current state: reconnect or disconnect, and switching to the destination that is not already active. Disconnecting or forgetting the active Bluetooth speaker safely returns routing to the default output first.
+
 Pairing modes that require a PIN or confirmation agent may need to be completed with `bluetoothctl` over SSH in this initial version.
 
 ## Reconnect and output selection

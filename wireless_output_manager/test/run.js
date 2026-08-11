@@ -80,6 +80,14 @@ async function main() {
   assert.deepStrictEqual(onboardingCalls, ['power', 'pair', 'trust', 'connect', 'refresh']);
   assert.strictEqual(onboardingSaved.preferredDeviceName, 'JBL PartyBox 100');
   assert.strictEqual(onboardingSaved.enabled, true, 'successful onboarding must enable reconnect management');
+
+  var removedOutput = false;
+  onboardingSaved.outputEnabled = true;
+  plugin._stopPlaybackForRouting = function () { return Promise.resolve(); };
+  plugin.outputManager = { removeOutput: async function () { removedOutput = true; } };
+  await plugin._returnToDefaultIfWireless();
+  assert.strictEqual(removedOutput, true, 'speaker removal must return active wireless routing to default');
+  assert.strictEqual(onboardingSaved.outputEnabled, false);
   console.log('All tests passed');
 }
 
