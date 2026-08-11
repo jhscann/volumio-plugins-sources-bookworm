@@ -1,75 +1,116 @@
 # Wireless Output Manager
 
-Wireless Output Manager is an experimental Volumio 4 / Bookworm plugin for sending playback to an external wireless speaker. Bluetooth speaker control is the only implemented backend. AirPlay, Sonos, Chromecast and UPnP/DLNA are architectural placeholders, not advertised features.
+Wireless Output Manager is an experimental Volumio 4 / Bookworm plugin that sends Volumio playback to a Bluetooth speaker. Bluetooth is the only implemented output type. AirPlay, Sonos, Chromecast and UPnP/DLNA are future architectural placeholders, not current features.
 
-## Current status
+This version is intended for technical preview and community testing. It has not been submitted to the Volumio plugin beta channel.
 
-The plugin provides:
+## Tested configuration
 
-- bounded Bluetooth discovery, pairing, trust, connect, disconnect and forget operations;
-- audio-profile-aware device ordering when BlueZ exposes UUIDs;
-- a persisted preferred speaker and a bounded 15-second reconnect monitor;
-- explicit, manual switching between Bluetooth and the selected Volumio hardware output;
-- read-only environment, Bluetooth, ALSA/audio-stack and MPD diagnostics;
-- a guarded, plugin-owned BlueALSA PCM contribution when BlueALSA is already installed;
-- verification and rollback if the ALSA contribution cannot be exposed;
-- conservative installation and removal that preserve pairings, packages and MPD configuration.
+The current version has been tested on:
 
-It does **not** install BlueALSA, PulseAudio or PipeWire. It does **not** edit `/etc/mpd.conf`. A virtual BlueALSA PCM is not guaranteed to appear in Volumio's hardware-oriented Playback Options selector; target-device validation is still required. See [PHASE0.md](PHASE0.md).
+- a Raspberry Pi running Volumio 4 / Bookworm;
+- the existing BlueZ and BlueALSA stack on that device;
+- a JBL PartyBox 100 Bluetooth speaker;
+- manual switching between the JBL speaker and an iFi USB DAC;
+- reconnect, plugin-only reset, reinstall and uninstall workflows.
 
-## Install
+Other Volumio 4 devices, Bluetooth speakers and audio configurations remain untested. The plugin deliberately does not install or replace the system audio stack.
 
-On a Volumio 4 / Bookworm device, place this directory in a plugin-source checkout, enter it, and run:
+## What works
+
+- Bluetooth speaker discovery, pairing, trust, connection and disconnection;
+- a simple onboarding flow: search, select, then use the selected speaker;
+- a saved preferred speaker with optional automatic reconnection;
+- explicit switching between the Bluetooth speaker and Volumio's normal audio output;
+- read-only environment, Bluetooth, ALSA, audio-stack and MPD diagnostics;
+- a guarded plugin-owned BlueALSA PCM contribution when BlueALSA is already installed;
+- verification and rollback when the ALSA contribution cannot be exposed;
+- a plugin-only setup reset that preserves system Bluetooth pairings;
+- conservative uninstall behavior that preserves pairings, packages and MPD configuration.
+
+The plugin does **not** install BlueALSA, PulseAudio or PipeWire and does **not** edit `/etc/mpd.conf` directly.
+
+## Important limitations
+
+- Audio routing is currently implemented only for an existing BlueALSA installation. Pairing and diagnostics may work on PulseAudio or PipeWire systems, but this version will not configure their audio routing.
+- Switching audio destinations stops playback. Wait for the switch to complete, then press Play. The current track restarts from the beginning.
+- Switching may take several seconds while MPD releases and reopens its audio device.
+- Pairing that requires a PIN or confirmation agent may need to be completed with `bluetoothctl` over SSH.
+- With Volumio **Mixer Type** set to **Hardware**, Bluetooth is effectively sent at 100%; Volumio's volume control continues to apply to the physical DAC instead. Use **Software** mixer mode if you want Volumio to control Bluetooth playback volume.
+
+## Install from the forum preview branch
+
+Connect to the Volumio device over SSH, then run:
 
 ```bash
+cd /tmp
+git clone --branch feat/wireless-output-manager --single-branch \
+  https://github.com/jhscann/volumio-plugins-sources-bookworm.git \
+  wireless-output-manager-src
+cd /tmp/wireless-output-manager-src/wireless_output_manager
 volumio plugin install
 ```
 
-The installer checks required base-system commands and reports the existing audio stack. It makes no global audio changes.
+Confirm the warning for manually installed, unverified plugins. After installation, open **Plugins**, enable **Wireless Output Manager**, then open its settings page.
 
-## Pair and connect
+The `/tmp/wireless-output-manager-src` checkout may disappear after a reboot. That does not remove the installed plugin. Clone it again if you later need a fresh source checkout.
 
-1. Open **Plugins → Wireless Output Manager**.
-2. Put the Bluetooth speaker in pairing mode.
-3. Select **Find Bluetooth speakers** and wait for discovery to finish.
+## Update a forum preview installation
+
+1. Choose **Play on default audio output**.
+2. Remove the installed plugin from Volumio's Plugins page. System Bluetooth pairings are preserved.
+3. If the source checkout still exists, update and reinstall it:
+
+```bash
+cd /tmp/wireless-output-manager-src
+git pull --ff-only
+cd wireless_output_manager
+volumio plugin install
+```
+
+If the source checkout no longer exists, repeat the installation commands above instead. Enable the plugin again after installation. A previously paired speaker normally reconnects without being put into pairing mode.
+
+## Set up a Bluetooth speaker
+
+1. Put the speaker in pairing mode. A speaker already paired with this Volumio device normally does not need pairing mode again.
+2. Open **Plugins → Wireless Output Manager**.
+3. Select **Search for speakers** and wait approximately 12 seconds.
 4. Choose the speaker under **Available speakers**.
-5. Select **Pair & connect**. The plugin powers on Bluetooth, pairs, trusts, connects and saves the speaker in one operation.
+5. Select **Use selected speaker**. The plugin powers on Bluetooth, pairs, trusts, connects and saves the speaker.
 6. Under **Choose where music plays**, select **Play on Bluetooth speaker**.
-7. Press Play after the route change completes.
+7. Wait for the route change to finish, then press Play.
 
-Previously paired speakers do not need pairing mode. Use **Reconnect speaker** instead. **Forget speaker** removes the BlueZ pairing, so pairing mode is required the next time it is added.
+To return to the output already selected in Volumio Playback Options, choose **Play on default audio output**, wait for the switch to finish, then press Play.
 
-The setup controls remain in a fixed, predictable order: **Search for speakers**, choose from **Available speakers**, then **Pair and connect**. To change speakers later, repeat the same three steps. The management section shows Reconnect or Disconnect according to the saved speaker's current state. Disconnecting an active Bluetooth speaker safely returns routing to the default output first. **Reset speaker setup** clears only this plugin's routing and saved speaker; it deliberately preserves system-wide BlueZ pairings so other Bluetooth plugins are not disrupted.
+## Everyday controls
 
-Pairing modes that require a PIN or confirmation agent may need to be completed with `bluetoothctl` over SSH in this initial version.
+- **Reconnect speaker** reconnects the saved speaker without changing the audio destination.
+- **Disconnect speaker** returns active Bluetooth routing to the default output before disconnecting.
+- **Reconnect automatically** reconnects the saved speaker when it becomes available. It never changes the selected audio destination.
+- **Reset speaker setup** returns to the default output and clears only this plugin's saved speaker and routing state. It preserves system-wide Bluetooth pairings so other Bluetooth plugins are not disrupted.
 
-## Reconnect and output selection
+To use a different speaker, repeat the search, selection and **Use selected speaker** workflow. The existing saved speaker is replaced only after the new speaker connects successfully.
 
-When enabled, the plugin checks the preferred device after startup and every 15 seconds. It never spins in a tight loop or overlaps reconnect attempts. A missing or powered-off speaker is reported as unavailable and does not prevent plugin startup.
+## Diagnostics
 
-Routing is deliberately manual. Choose **Play on Bluetooth speaker** to route Volumio through the connected saved speaker, or **Play on default audio output** to return to the hardware device selected in Playback Options. Either button stops playback first and leaves it stopped; press Play after the switch completes. The current track restarts from the beginning. Auto-reconnect reconnects Bluetooth only; it never changes the selected audio route.
+Open **Diagnostics** and select **Run diagnostics**. **Export debug log** writes a JSON report under:
 
-## Volume
+```text
+/data/INTERNAL/wireless-output-manager/
+```
 
-With **Playback Options → Mixer Type** set to **Hardware**, Volumio does not apply software attenuation to the Bluetooth path: Bluetooth is effectively sent at 100%, while Volumio's volume control applies only to the physical DAC. Choose **Software** if you want Volumio's volume control to affect Bluetooth playback. You may switch back to Hardware when using the default DAC.
-
-## Diagnostics and troubleshooting
-
-Use **Diagnostics → Run diagnostics**. Export writes a JSON report under `/data/INTERNAL/wireless-output-manager/`; it contains command output but no plugin secrets.
-
-Useful manual checks are:
+The report contains command output but no plugin secrets. Useful manual checks include:
 
 ```bash
 bluetoothctl show
 bluetoothctl devices
 bluetoothctl devices Paired
+bluetoothctl devices Connected
 bluetoothctl info <MAC>
 systemctl status bluetooth --no-pager
-journalctl -u bluetooth --since "30 minutes ago" --no-pager
 rfkill list bluetooth
 aplay -L
 aplay -l
-cat /proc/asound/cards
 mpc outputs
 ```
 
@@ -80,26 +121,34 @@ systemctl status bluealsa --no-pager
 bluealsa-aplay -L
 ```
 
-For an existing PulseAudio or PipeWire installation:
-
-```bash
-pactl info
-pactl list short sinks
-pactl list short cards
-pw-cli info all
-```
-
 Common messages:
 
-- **Bluetooth service unavailable**: check rfkill and `bluetooth.service`.
-- **Preferred speaker unavailable**: turn it on and ensure another source has not claimed it.
-- **No supported Bluetooth audio sender**: the plugin intentionally did not install a second audio stack. Review the Phase 0 report for the target and choose a compatible system architecture first.
-- **PCM not exposed**: the guarded contribution was rolled back; inspect the exported diagnostics.
+- **Bluetooth service unavailable**: check `rfkill` and `bluetooth.service`.
+- **Preferred speaker unavailable**: turn on the speaker and make sure another source has not claimed it.
+- **No supported Bluetooth audio sender**: the plugin found no existing supported sender and intentionally installed nothing.
+- **PCM not exposed**: the guarded ALSA contribution was rolled back; export diagnostics for investigation.
 
-## Safe uninstall
+## Uninstall
 
-Run the standard Volumio plugin removal. Uninstall deletes only the plugin-owned ALSA contribution. It preserves Bluetooth pairings, BlueZ, BlueALSA/PulseAudio/PipeWire packages, `/etc/mpd.conf`, and user diagnostics under `/data/INTERNAL`.
+First choose **Play on default audio output**, then remove the plugin through Volumio's Plugins page.
 
-## Future adapters
+Uninstall removes only the plugin-owned ALSA contribution. It preserves:
 
-The adapter boundary reserves AirPlay, Sonos, Chromecast and UPnP/DLNA. These protocols often use remote stream and queue models rather than ALSA devices, with different latency, authentication and synchronization behavior. They will be implemented independently only when they can meet Volumio reliability expectations.
+- system Bluetooth pairings;
+- BlueZ and audio-stack packages;
+- `/etc/mpd.conf`;
+- exported diagnostics under `/data/INTERNAL`.
+
+## Reporting a test result
+
+When reporting a problem, include:
+
+- the Volumio version and Raspberry Pi model;
+- the Bluetooth speaker make and model;
+- whether BlueALSA, PulseAudio or PipeWire is installed;
+- the action that failed and the exact message shown;
+- an exported diagnostic report, after reviewing it for any information you do not want to share.
+
+## Future output adapters
+
+The internal adapter boundary allows future AirPlay, Sonos, Chromecast and UPnP/DLNA implementations. Those protocols often use remote stream or queue models rather than ALSA devices, so they will be implemented and tested independently.

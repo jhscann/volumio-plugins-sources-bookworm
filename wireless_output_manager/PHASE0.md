@@ -1,8 +1,8 @@
 # Phase 0 technical assessment
 
-## Scope and evidence
+## Initial scope and evidence
 
-The development checkout is not a Raspberry Pi running Volumio. Therefore it cannot establish the target's kernel, BlueZ version, active services, installed audio packages, ALSA cards or MPD outputs. Those facts must be collected on the target. The plugin's read-only diagnostics module collects them without installing packages or changing configuration.
+The initial development checkout was not a Raspberry Pi running Volumio, so the architecture decision began with repository inspection and read-only diagnostics. No packages or system configuration were changed during that investigation.
 
 Repository inspection established the following Volumio 4 / Bookworm conventions:
 
@@ -19,13 +19,27 @@ Bluetooth control uses the system's existing BlueZ `bluetoothctl`. Audio output 
 
 1. If BlueALSA already exists, the plugin may create a plugin-owned `womBluetooth` ALSA PCM contribution and request a normal ALSA rebuild.
 2. The PCM is verified with `aplay -L`; failure triggers rollback.
-3. The plugin does not directly edit `/etc/mpd.conf` and does not claim the PCM is selectable until target-device validation proves it.
+3. The plugin does not directly edit `/etc/mpd.conf`. It exposes and verifies its plugin-owned PCM through Volumio's ALSA contribution mechanism.
 4. If only PulseAudio or PipeWire is present, the initial version reports that stack but does not create routing. Installing a second audio stack automatically is unsafe.
 5. If no sender is present, pairing, reconnect and diagnostics remain available while audio creation returns a clear unsupported message.
 
 This is the least-invasive implementation supported by the evidence available without access to an actual Volumio 4 device.
 
-## Target-device verification
+## Completed target-device verification
+
+The Bluetooth implementation was subsequently tested on a Raspberry Pi running Volumio 4 / Bookworm with an existing BlueALSA sender. Testing confirmed:
+
+- discovery, pairing, trust and connection of a JBL PartyBox 100;
+- exposure of the `womBluetooth` and `womBluetoothOut` ALSA PCMs;
+- playback through the JBL PartyBox 100;
+- manual switching between Bluetooth and an iFi USB DAC;
+- safe fallback to the default output when Bluetooth routing is removed;
+- reconnect, plugin-only reset, reinstall and conservative uninstall behavior;
+- preservation of system Bluetooth pairings during reset and uninstall.
+
+The tested device showed that output switching can be slow while playback releases and reopens the audio path. The released workflow therefore stops playback deliberately and asks the user to press Play after switching; playback-position preservation is not attempted in this version.
+
+## Verification on additional devices
 
 Run **Diagnostics → Run diagnostics** before creating an output. Verify:
 
@@ -35,4 +49,4 @@ Run **Diagnostics → Run diagnostics** before creating an output. Verify:
 - ALSA device enumeration from `aplay -L`, `aplay -l` and `/proc/asound/cards`.
 - MPD's generated output state from `mpc outputs` and the read-only relevant lines of `/etc/mpd.conf`.
 
-No automatic output selection should be added until this evidence is captured from a representative Volumio 4 Raspberry Pi.
+Capture this evidence before reporting compatibility with a new Volumio image, audio stack or hardware family. The current positive result applies only to the tested BlueALSA configuration; PulseAudio and PipeWire routing remain unimplemented.
