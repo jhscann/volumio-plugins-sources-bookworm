@@ -102,7 +102,7 @@ WirelessOutputManager.prototype._toast = function (level, message) {
 
 WirelessOutputManager.prototype.refreshUI = function () {
   var self = this;
-  return self.getUIConfig().then(function (uiConfig) {
+  return Promise.resolve(self.getUIConfig()).then(function (uiConfig) {
     self.commandRouter.broadcastMessage('pushUiConfig', uiConfig);
     return uiConfig;
   }).catch(function (error) {
