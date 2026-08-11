@@ -49,7 +49,7 @@ Routing is deliberately manual. Choose **Play on Bluetooth speaker** to route Vo
 
 ## Volume
 
-Set **Playback Options → Mixer Type** to **Software** when using Bluetooth output. A hardware mixer targets the physical DAC and will not alter the redirected Bluetooth stream. If you return to the default DAC, you may switch back to its hardware mixer for normal DAC-controlled volume, but change it to Software again before using Bluetooth.
+With **Playback Options → Mixer Type** set to **Hardware**, Volumio does not apply software attenuation to the Bluetooth path: Bluetooth is effectively sent at 100%, while Volumio's volume control applies only to the physical DAC. Choose **Software** if you want Volumio's volume control to affect Bluetooth playback. You may switch back to Hardware when using the default DAC.
 
 ## Diagnostics and troubleshooting
 

@@ -7,7 +7,7 @@
   "AVAILABLE_SPEAKERS": "Available speakers",
   "PAIR_AND_CONNECT": "Pair & connect",
   "AUDIO_DESTINATION": "Choose where music plays",
-  "AUDIO_DESTINATION_NOTE": "Choose the Bluetooth speaker or return to Volumio's normal audio output. For Bluetooth volume control, set Playback Options → Mixer Type to Software; Hardware volume controls only the physical DAC.",
+  "AUDIO_DESTINATION_NOTE": "Choose the Bluetooth speaker or return to Volumio's normal audio output. With Mixer Type set to Hardware, Bluetooth is effectively sent at 100% and Volumio volume applies only to the DAC. Choose Software to control Bluetooth volume from Volumio.",
   "PLAY_ON_WIRELESS": "Play on Bluetooth speaker",
   "PLAY_ON_DEFAULT": "Play on default audio output",
   "SWITCH_OUTPUT_NOTE": "Switching stops playback. Press Play when the change completes; the current track restarts from the beginning.",

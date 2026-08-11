@@ -180,7 +180,7 @@ WirelessOutputManager.prototype.getUIConfig = function () {
     if (connected) set('sections[0]', 'description', preferredName + ' is paired and connected.');
     else if (paired) set('sections[0]', 'description', preferredName + ' is paired but currently disconnected.');
     else set('sections[0]', 'description', 'Put your speaker in pairing mode, find it, then choose Pair & connect.');
-    var volumeAdvice = ' Volume tip: set Playback Options → Mixer Type to Software for Bluetooth; Hardware volume controls only the physical DAC.';
+    var volumeAdvice = ' Volume tip: with Mixer Type set to Hardware, Bluetooth is effectively sent at 100% and Volumio volume applies only to the DAC. Choose Software to control Bluetooth volume from Volumio.';
     set('sections[1]', 'description', (self.config.get('outputEnabled')
       ? 'Current destination: ' + preferredName + '. Switching stops playback; press Play afterward.'
       : 'Current destination: the default device selected in Volumio Playback Options.') + volumeAdvice);
