@@ -46,7 +46,7 @@ OutputManager.prototype.createOutput = async function (deviceId) {
   var target = path.join(asoundDir, this.filename);
   var backup = target + '.bak';
   await fs.ensureDir(asoundDir);
-  if (await fs.pathExists(target)) await fs.copy(target, backup, { overwrite: false, errorOnExist: false });
+  if (await fs.pathExists(target)) await fs.copy(target, backup, { overwrite: true });
   var content = [
     '# Managed by Wireless Output Manager. Remove via the plugin, not by editing this file.',
     'pcm.womBluetooth {',
