@@ -4,13 +4,14 @@
     {
       "id": "speakerSetup",
       "element": "section",
-      "label": "TRANSLATE.SPEAKER_SETUP",
+      "label": "TRANSLATE.BLUETOOTH_SPEAKER",
       "icon": "fa-bluetooth-b",
-      "description": "TRANSLATE.SPEAKER_SETUP_INTRO",
+      "description": "TRANSLATE.DISCOVERY_INTRO",
+      "onSave": {"type": "controller", "endpoint": "system_hardware/wireless_output_manager", "method": "pairAndConnectDevice"},
+      "saveButton": {"label": "TRANSLATE.PAIR_AND_CONNECT", "data": ["preferredDevice"]},
       "content": [
-        {"id": "scanDevices", "element": "button", "label": "TRANSLATE.FIND_SPEAKERS", "description": "TRANSLATE.FIND_SPEAKERS_NOTE", "onClick": {"type": "plugin", "endpoint": "system_hardware/wireless_output_manager", "method": "scanDevices", "data": []}},
-        {"id": "preferredDevice", "element": "select", "label": "TRANSLATE.AVAILABLE_SPEAKERS", "value": {"value": "", "label": "No speaker selected"}, "options": [], "hidden": false},
-        {"id": "useSelectedSpeaker", "element": "button", "label": "TRANSLATE.PAIR_AND_CONNECT", "hidden": false, "onClick": {"type": "plugin", "endpoint": "system_hardware/wireless_output_manager", "method": "pairAndConnectDevice", "data": ["preferredDevice"]}}
+        {"id": "scanDevices", "element": "button", "label": "TRANSLATE.SEARCH_FOR_SPEAKERS", "description": "TRANSLATE.FIND_SPEAKERS_NOTE", "onClick": {"type": "plugin", "endpoint": "system_hardware/wireless_output_manager", "method": "scanDevices", "data": []}},
+        {"id": "preferredDevice", "element": "select", "label": "TRANSLATE.AVAILABLE_SPEAKERS", "value": {"value": "", "label": "No speaker selected"}, "options": []}
       ]
     },
     {
@@ -19,22 +20,23 @@
       "label": "TRANSLATE.AUDIO_DESTINATION",
       "icon": "fa-volume-up",
       "description": "TRANSLATE.AUDIO_DESTINATION_NOTE",
+      "hidden": false,
       "content": [
         {"id": "createOutput", "element": "button", "label": "TRANSLATE.PLAY_ON_WIRELESS", "hidden": false, "onClick": {"type": "plugin", "endpoint": "system_hardware/wireless_output_manager", "method": "createBluetoothOutput", "data": []}},
-        {"id": "removeOutput", "element": "button", "label": "TRANSLATE.PLAY_ON_DEFAULT", "hidden": false, "onClick": {"type": "plugin", "endpoint": "system_hardware/wireless_output_manager", "method": "removeBluetoothOutput", "data": []}}
+        {"id": "removeOutput", "element": "button", "label": "TRANSLATE.PLAY_ON_DEFAULT", "onClick": {"type": "plugin", "endpoint": "system_hardware/wireless_output_manager", "method": "removeBluetoothOutput", "data": []}}
       ]
     },
     {
       "id": "speakerManagement",
       "element": "section",
-      "label": "TRANSLATE.SAVED_SPEAKER",
+      "label": "TRANSLATE.MANAGE_SPEAKER",
       "icon": "fa-headphones",
       "description": "TRANSLATE.SAVED_SPEAKER_NOTE",
       "hidden": false,
       "content": [
         {"id": "connectDevice", "element": "button", "label": "TRANSLATE.RECONNECT_SPEAKER", "hidden": false, "onClick": {"type": "plugin", "endpoint": "system_hardware/wireless_output_manager", "method": "connectDevice", "data": []}},
         {"id": "disconnectDevice", "element": "button", "label": "TRANSLATE.DISCONNECT_SPEAKER", "hidden": false, "onClick": {"type": "plugin", "endpoint": "system_hardware/wireless_output_manager", "method": "disconnectDevice", "data": []}},
-        {"id": "forgetDevice", "element": "button", "label": "TRANSLATE.FORGET_SPEAKER", "description": "TRANSLATE.FORGET_SPEAKER_NOTE", "hidden": false, "onClick": {"type": "plugin", "endpoint": "system_hardware/wireless_output_manager", "method": "forgetDevice", "data": []}}
+        {"id": "resetSpeakerSetup", "element": "button", "label": "TRANSLATE.RESET_SPEAKER_SETUP", "description": "TRANSLATE.RESET_SPEAKER_SETUP_NOTE", "onClick": {"type": "plugin", "endpoint": "system_hardware/wireless_output_manager", "method": "resetSpeakerSetup", "data": []}}
       ]
     },
     {

@@ -21,7 +21,6 @@ function WirelessOutputManager(context) {
   this.lastError = '';
   this.lastDiagnostics = null;
   this.devices = [];
-  this.changingSpeaker = false;
 }
 
 WirelessOutputManager.prototype.onVolumioStart = function () {
@@ -185,25 +184,18 @@ WirelessOutputManager.prototype.getUIConfig = function () {
     var status = await self.bluetooth.getStatus(preferred).catch(function (error) { return { available: false, lastError: error.message }; });
     var connected = Boolean(status.preferred && status.preferred.connected);
     var paired = Boolean(status.preferred && status.preferred.paired);
-    if (connected) set('sections[0]', 'description', preferredName + ' is paired and connected.');
-    else if (paired) set('sections[0]', 'description', preferredName + ' is paired but currently disconnected.');
-    else set('sections[0]', 'description', 'Put your speaker in pairing mode, find it, then choose Pair & connect.');
     var outputEnabled = Boolean(self.config.get('outputEnabled'));
-    var changingSpeaker = Boolean(self.changingSpeaker);
-    set('sections[0].content[0]', 'label', preferred ? 'Find another speaker' : 'Find Bluetooth speakers');
-    set('sections[0].content[1]', 'hidden', Boolean(preferred) && !changingSpeaker);
-    set('sections[0].content[2]', 'hidden', Boolean(preferred) && !changingSpeaker);
-    set('sections[1].content[0]', 'hidden', outputEnabled || !connected);
-    set('sections[1].content[1]', 'hidden', !outputEnabled);
-    set('sections[1].content[0]', 'label', 'Switch to ' + preferredName);
-    set('sections[1].content[1]', 'label', 'Switch to default audio output');
+    if (connected) set('sections[0]', 'description', preferredName + ' is connected. Search again only if you want to add or change the speaker.');
+    else if (paired) set('sections[0]', 'description', preferredName + ' is saved but disconnected. Use Reconnect speaker below, or search to choose another speaker.');
+    else set('sections[0]', 'description', 'Put your speaker in pairing mode, select Search for speakers, choose it from the list, then select Pair and connect.');
+    set('sections[1]', 'hidden', !preferred);
+    set('sections[1].content[0]', 'hidden', !connected);
     set('sections[1]', 'description', outputEnabled
       ? 'Music is routed to ' + preferredName + '. Press Play after switching. With Mixer Type set to Hardware, Bluetooth is effectively sent at 100%; choose Software to control Bluetooth volume from Volumio.'
       : 'Music is routed to the default device selected in Volumio Playback Options.');
     set('sections[2]', 'hidden', !preferred);
     set('sections[2].content[0]', 'hidden', !preferred || connected);
     set('sections[2].content[1]', 'hidden', !connected);
-    set('sections[2].content[2]', 'hidden', !preferred);
     set('sections[4].content[3]', 'value', self.lastDiagnostics ? JSON.stringify(self.lastDiagnostics, null, 2) : 'Run diagnostics to collect system state.');
     set('sections[4].content[4]', 'value', self.lastError || 'None');
     set('sections[4].content[3]', 'hidden', !self.lastDiagnostics);
@@ -241,7 +233,6 @@ WirelessOutputManager.prototype.pairAndConnectDevice = function (data) {
     self.config.set('preferredDeviceMac', id);
     self.config.set('preferredDeviceName', info.name || id);
     self.config.set('enabled', true);
-    self.changingSpeaker = false;
     if (self.config.get('autoReconnect')) self._scheduleReconnect(15000);
     await self.refreshUI();
     return info;
@@ -269,7 +260,6 @@ WirelessOutputManager.prototype.stopBluetooth = function () {
 };
 WirelessOutputManager.prototype.scanDevices = function () {
   var self = this;
-  self.changingSpeaker = true;
   return self._action('Scanning for devices', function () {
     return self.bluetooth.scan(12).then(function (result) {
       self.devices = result.devices;
@@ -322,10 +312,23 @@ WirelessOutputManager.prototype.forgetDevice = function (data) {
     if (self.config.get('preferredDeviceMac') === id) {
       self.config.set('preferredDeviceMac', ''); self.config.set('preferredDeviceName', '');
     }
-    self.changingSpeaker = false;
     await self.refreshUI();
     return result;
   }, 'Speaker forgotten');
+};
+
+WirelessOutputManager.prototype.resetSpeakerSetup = function () {
+  var self = this;
+  return self._action('Resetting speaker setup', async function () {
+    await self._returnToDefaultIfWireless();
+    self._clearReconnect();
+    self.config.set('preferredDeviceMac', '');
+    self.config.set('preferredDeviceName', '');
+    self.config.set('enabled', false);
+    self.config.set('outputEnabled', false);
+    self.devices = [];
+    await self.refreshUI();
+  }, 'Speaker setup reset; system Bluetooth pairings were preserved');
 };
 
 WirelessOutputManager.prototype.createBluetoothOutput = function () {

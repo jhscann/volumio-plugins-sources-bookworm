@@ -13,6 +13,7 @@ async function main() {
   assert(uiIds.indexOf('scanDevices') !== -1 && uiIds.indexOf('preferredDevice') !== -1, 'onboarding must expose discovery and speaker selection');
   assert(uiIds.indexOf('pairDevice') === -1 && uiIds.indexOf('trustDevice') === -1, 'low-level pairing controls must stay out of the main UI');
   assert(uiIds.indexOf('createOutput') !== -1 && uiIds.indexOf('removeOutput') !== -1, 'manual audio destination controls must remain available');
+  assert(uiIds.indexOf('resetSpeakerSetup') !== -1, 'safe plugin-only reset must remain available');
 
   var adapter = new BluetoothAdapter({
     runner: { run: function () { return Promise.resolve({ stdout: '' }); } },
@@ -88,6 +89,51 @@ async function main() {
   await plugin._returnToDefaultIfWireless();
   assert.strictEqual(removedOutput, true, 'speaker removal must return active wireless routing to default');
   assert.strictEqual(onboardingSaved.outputEnabled, false);
+
+  onboardingSaved.preferredDeviceMac = 'C4:30:18:EA:9D:EC';
+  onboardingSaved.preferredDeviceName = 'JBL PartyBox 100';
+  plugin.devices = [{ id: 'C4:30:18:EA:9D:EC', name: 'JBL PartyBox 100' }];
+  plugin._returnToDefaultIfWireless = async function () {};
+  plugin._clearReconnect = function () {};
+  plugin.refreshUI = function () { return Promise.resolve(); };
+  plugin.bluetooth.forget = function () { throw new Error('reset must preserve system pairings'); };
+  await plugin.resetSpeakerSetup();
+  assert.strictEqual(onboardingSaved.preferredDeviceMac, '');
+  assert.strictEqual(onboardingSaved.enabled, false);
+  assert.deepStrictEqual(plugin.devices, []);
+
+  var uiWrites = {};
+  var uiValues = {
+    preferredDeviceMac: 'C4:30:18:EA:9D:EC',
+    preferredDeviceName: 'JBL PartyBox 100',
+    outputEnabled: false,
+    autoReconnect: true,
+    debugLogging: false
+  };
+  plugin.commandRouter = {
+    sharedVars: { get: function () { return 'en'; } },
+    i18nJson: function () { return Promise.resolve(JSON.parse(JSON.stringify(uiConfig))); }
+  };
+  plugin.configManager = {
+    setUIConfigParam: function (ui, path, value) { uiWrites[path] = value; },
+    pushUIConfigParam: function () {}
+  };
+  plugin.config = { get: function (key) { return uiValues[key]; } };
+  plugin.bluetooth = { getStatus: async function () { return { preferred: { paired: true, connected: true } }; } };
+  plugin.devices = [];
+  await plugin.getUIConfig();
+  assert.strictEqual(uiWrites['sections[1].hidden'], false, 'audio destination must appear for a saved speaker');
+  assert.strictEqual(uiWrites['sections[1].content[0].hidden'], false, 'wireless destination must appear for a connected speaker');
+  assert.strictEqual(uiWrites['sections[2].content[0].hidden'], true, 'reconnect must hide while connected');
+  assert.strictEqual(uiWrites['sections[2].content[1].hidden'], false, 'disconnect must show while connected');
+
+  uiWrites = {};
+  uiValues.preferredDeviceMac = '';
+  uiValues.preferredDeviceName = '';
+  plugin.bluetooth.getStatus = async function () { return { preferred: null }; };
+  await plugin.getUIConfig();
+  assert.strictEqual(uiWrites['sections[1].hidden'], true, 'audio destination must hide until a speaker is saved');
+  assert.strictEqual(uiWrites['sections[2].hidden'], true, 'speaker management must hide until a speaker is saved');
   console.log('All tests passed');
 }
 
