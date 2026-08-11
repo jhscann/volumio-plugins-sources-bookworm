@@ -100,6 +100,17 @@ WirelessOutputManager.prototype._toast = function (level, message) {
   this.commandRouter.pushToastMessage(level, 'Wireless Output Manager', message);
 };
 
+WirelessOutputManager.prototype.refreshUI = function () {
+  var self = this;
+  return self.getUIConfig().then(function (uiConfig) {
+    self.commandRouter.broadcastMessage('pushUiConfig', uiConfig);
+    return uiConfig;
+  }).catch(function (error) {
+    self.log.warn('Unable to refresh settings page: ' + error.message);
+    throw error;
+  });
+};
+
 WirelessOutputManager.prototype._action = function (name, operation, successMessage) {
   var self = this;
   self.btLog.info(name);
@@ -180,8 +191,7 @@ WirelessOutputManager.prototype.scanDevices = function () {
   return self._action('Scanning for devices', function () {
     return self.bluetooth.scan(12).then(function (result) {
       self.devices = result.devices;
-      self.commandRouter.refreshUIConfig();
-      return result;
+      return self.refreshUI().then(function () { return result; });
     });
   }, 'Bluetooth scan finished');
 };
@@ -231,9 +241,9 @@ WirelessOutputManager.prototype.removeBluetoothOutput = function () {
 
 WirelessOutputManager.prototype.runDiagnostics = function () {
   var self = this;
-  return self.diagnostics.all().then(function (result) {
+  return self.diagnostics.all().then(async function (result) {
     self.lastDiagnostics = result;
-    self.commandRouter.refreshUIConfig();
+    await self.refreshUI();
     self._toast('success', 'Diagnostics complete');
     return result;
   }).catch(function (error) {
