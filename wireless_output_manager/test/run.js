@@ -6,6 +6,14 @@ var CommandRunner = require('../lib/commandRunner').CommandRunner;
 var WirelessOutputManager = require('../index');
 
 async function main() {
+  var uiConfig = require('../UIConfig.json');
+  var uiIds = uiConfig.sections.reduce(function (ids, section) {
+    return ids.concat(section.content.map(function (item) { return item.id; }));
+  }, []);
+  assert(uiIds.indexOf('scanDevices') !== -1 && uiIds.indexOf('preferredDevice') !== -1, 'onboarding must expose discovery and speaker selection');
+  assert(uiIds.indexOf('pairDevice') === -1 && uiIds.indexOf('trustDevice') === -1, 'low-level pairing controls must stay out of the main UI');
+  assert(uiIds.indexOf('createOutput') !== -1 && uiIds.indexOf('removeOutput') !== -1, 'manual audio destination controls must remain available');
+
   var adapter = new BluetoothAdapter({
     runner: { run: function () { return Promise.resolve({ stdout: '' }); } },
     logger: { info: function () {}, warn: function () {}, error: function () {} }
@@ -50,6 +58,28 @@ async function main() {
   await plugin.savePreferredDevice({ preferredDevice: [{ value: 'c4:30:18:ea:9d:ec', label: 'JBL PartyBox 100 (audio)' }] });
   assert.strictEqual(saved.preferredDeviceMac, 'C4:30:18:EA:9D:EC', 'preferred-device arrays must save a plain normalized MAC');
   assert.strictEqual(saved.preferredDeviceName, 'JBL PartyBox 100');
+
+  var onboardingCalls = [];
+  var onboardingSaved = {};
+  plugin.btLog = { info: function () {}, error: function () {} };
+  plugin.config = {
+    get: function (key) { return key === 'autoReconnect' ? false : onboardingSaved[key]; },
+    set: function (key, value) { onboardingSaved[key] = value; }
+  };
+  plugin.bluetooth = {
+    powerOn: async function () { onboardingCalls.push('power'); },
+    pair: async function () { onboardingCalls.push('pair'); },
+    trust: async function () { onboardingCalls.push('trust'); },
+    connect: async function () { onboardingCalls.push('connect'); },
+    getDeviceInfo: async function () {
+      return { id: 'C4:30:18:EA:9D:EC', name: 'JBL PartyBox 100', connected: onboardingCalls.indexOf('connect') !== -1 };
+    }
+  };
+  plugin.refreshUI = function () { onboardingCalls.push('refresh'); return Promise.resolve(); };
+  await plugin.pairAndConnectDevice({ preferredDevice: [{ value: 'C4:30:18:EA:9D:EC', label: 'JBL PartyBox 100' }] });
+  assert.deepStrictEqual(onboardingCalls, ['power', 'pair', 'trust', 'connect', 'refresh']);
+  assert.strictEqual(onboardingSaved.preferredDeviceName, 'JBL PartyBox 100');
+  assert.strictEqual(onboardingSaved.enabled, true, 'successful onboarding must enable reconnect management');
   console.log('All tests passed');
 }
 

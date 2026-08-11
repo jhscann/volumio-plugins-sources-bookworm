@@ -153,50 +153,79 @@ WirelessOutputManager.prototype.getUIConfig = function () {
     path.join(__dirname, 'i18n', 'strings_en.json'), path.join(__dirname, 'UIConfig.json')
   ).then(async function (ui) {
     function set(index, key, value) { self.configManager.setUIConfigParam(ui, index + '.' + key, value); }
-    set('sections[0].content[0]', 'value', Boolean(self.config.get('enabled')));
-    set('sections[0].content[1]', 'value', { value: 'bluetooth', label: 'Bluetooth' });
-    set('sections[0].content[2]', 'value', Boolean(self.config.get('autoReconnect')));
-    set('sections[0].content[3]', 'value', { value: self.config.get('volumeMode'), label: self.config.get('volumeMode') });
-    set('sections[0].content[4]', 'value', Boolean(self.config.get('debugLogging')));
+    set('sections[3].content[0]', 'value', Boolean(self.config.get('autoReconnect')));
+    set('sections[3].content[1]', 'value', Boolean(self.config.get('debugLogging')));
     var preferred = self.config.get('preferredDeviceMac') || '';
-    var preferredName = self.config.get('preferredDeviceName') || 'No preferred device';
-    set('sections[1].content[0]', 'value', { value: preferred, label: preferredName });
+    var preferredName = self.config.get('preferredDeviceName') || 'No speaker selected';
+    set('sections[0].content[1]', 'value', { value: preferred, label: preferredName });
     // A newly loaded plugin has no in-memory scan results. Keep the persisted
     // selection in the option list so Volumio does not discard or hide a
     // select control whose current value has no matching option.
     if (preferred) {
-      self.configManager.pushUIConfigParam(ui, 'sections[1].content[0].options', {
+      self.configManager.pushUIConfigParam(ui, 'sections[0].content[1].options', {
         value: preferred,
         label: preferredName
       });
     }
     self.devices.forEach(function (device) {
       if (device.id === preferred) return;
-      self.configManager.pushUIConfigParam(ui, 'sections[1].content[0].options', {
+      self.configManager.pushUIConfigParam(ui, 'sections[0].content[1].options', {
         value: device.id,
         label: device.name + (device.audioCapable === true ? ' (audio)' : '')
       });
     });
     var status = await self.bluetooth.getStatus(preferred).catch(function (error) { return { available: false, lastError: error.message }; });
-    set('sections[1].content[11]', 'value', JSON.stringify(status, null, 2));
-    set('sections[2].content[3]', 'value', self.lastDiagnostics ? JSON.stringify(self.lastDiagnostics, null, 2) : 'Run diagnostics to collect system state.');
-    set('sections[2].content[4]', 'value', self.lastError || 'None');
+    var connected = Boolean(status.preferred && status.preferred.connected);
+    var paired = Boolean(status.preferred && status.preferred.paired);
+    if (connected) set('sections[0]', 'description', preferredName + ' is paired and connected.');
+    else if (paired) set('sections[0]', 'description', preferredName + ' is paired but currently disconnected.');
+    else set('sections[0]', 'description', 'Put your speaker in pairing mode, find it, then choose Pair & connect.');
+    var volumeAdvice = ' Volume tip: set Playback Options → Mixer Type to Software for Bluetooth; Hardware volume controls only the physical DAC.';
+    set('sections[1]', 'description', (self.config.get('outputEnabled')
+      ? 'Current destination: ' + preferredName + '. Switching stops playback; press Play afterward.'
+      : 'Current destination: the default device selected in Volumio Playback Options.') + volumeAdvice);
+    set('sections[2].content[0]', 'hidden', !preferred || connected);
+    set('sections[2].content[1]', 'hidden', !connected);
+    set('sections[2].content[2]', 'hidden', !preferred);
+    set('sections[4].content[3]', 'value', self.lastDiagnostics ? JSON.stringify(self.lastDiagnostics, null, 2) : 'Run diagnostics to collect system state.');
+    set('sections[4].content[4]', 'value', self.lastError || 'None');
     return ui;
   });
 };
 
 WirelessOutputManager.prototype.saveSettings = function (data) {
   var self = this;
-  ['enabled', 'autoReconnect', 'debugLogging'].forEach(function (key) { self.config.set(key, Boolean(data[key])); });
-  ['volumeMode'].forEach(function (key) {
-    var value = data[key] && data[key].value !== undefined ? data[key].value : data[key];
-    if (value !== undefined) self.config.set(key, value);
+  ['autoReconnect', 'debugLogging'].forEach(function (key) {
+    if (data[key] !== undefined) self.config.set(key, Boolean(data[key]));
   });
   self.config.set('activeBackend', 'bluetooth');
   if (self.config.get('enabled') && self.config.get('autoReconnect')) self._scheduleReconnect(1000);
   else self._clearReconnect();
   self._toast('success', 'Settings saved');
   return libQ.resolve();
+};
+
+WirelessOutputManager.prototype.pairAndConnectDevice = function (data) {
+  var self = this;
+  var id = self._selected(data);
+  if (!BluetoothAdapter.MAC_RE.test(id)) {
+    self._toast('error', 'Find and select a Bluetooth speaker first');
+    return libQ.reject(new Error('Find and select a Bluetooth speaker first'));
+  }
+  return self._action('Pairing and connecting ' + id, async function () {
+    await self.bluetooth.powerOn();
+    await self.bluetooth.pair(id);
+    await self.bluetooth.trust(id);
+    var beforeConnect = await self.bluetooth.getDeviceInfo(id).catch(function () { return null; });
+    if (!beforeConnect || !beforeConnect.connected) await self.bluetooth.connect(id);
+    var info = await self.bluetooth.getDeviceInfo(id);
+    self.config.set('preferredDeviceMac', id);
+    self.config.set('preferredDeviceName', info.name || id);
+    self.config.set('enabled', true);
+    if (self.config.get('autoReconnect')) self._scheduleReconnect(15000);
+    await self.refreshUI();
+    return info;
+  }, 'Speaker paired, connected and saved');
 };
 
 WirelessOutputManager.prototype.savePreferredDevice = function (data) {
@@ -246,15 +275,22 @@ WirelessOutputManager.prototype.trustDevice = function (data) {
 WirelessOutputManager.prototype.connectDevice = function (data) {
   var self = this; var id = self._selected(data);
   return self._action('Connecting ' + id, async function () {
-    var result = await self.bluetooth.connect(id);
+    var before = await self.bluetooth.getDeviceInfo(id).catch(function () { return null; });
+    var result = before && before.connected ? { stdout: 'Device is already connected', exitCode: 0 } : await self.bluetooth.connect(id);
     var info = await self.bluetooth.getDeviceInfo(id);
     self.config.set('preferredDeviceMac', id);
     self.config.set('preferredDeviceName', info.name || id);
+    await self.refreshUI();
     return result;
   }, 'Bluetooth speaker connected');
 };
 WirelessOutputManager.prototype.disconnectDevice = function (data) {
-  var id = this._selected(data); return this._action('Disconnecting ' + id, this.bluetooth.disconnect.bind(this.bluetooth, id), 'Device disconnected');
+  var self = this; var id = self._selected(data);
+  return self._action('Disconnecting ' + id, async function () {
+    var result = await self.bluetooth.disconnect(id);
+    await self.refreshUI();
+    return result;
+  }, 'Speaker disconnected');
 };
 WirelessOutputManager.prototype.forgetDevice = function (data) {
   var self = this; var id = self._selected(data);
@@ -263,8 +299,9 @@ WirelessOutputManager.prototype.forgetDevice = function (data) {
     if (self.config.get('preferredDeviceMac') === id) {
       self.config.set('preferredDeviceMac', ''); self.config.set('preferredDeviceName', '');
     }
+    await self.refreshUI();
     return result;
-  }, 'Device forgotten');
+  }, 'Speaker forgotten');
 };
 
 WirelessOutputManager.prototype.createBluetoothOutput = function () {
@@ -274,9 +311,9 @@ WirelessOutputManager.prototype.createBluetoothOutput = function () {
       return self.outputManager.createOutput(self.config.get('preferredDeviceMac'));
     }).then(function (result) {
       self.config.set('outputEnabled', true);
-      return result;
+      return self.refreshUI().then(function () { return result; });
     });
-  }, 'Bluetooth ALSA output created');
+  }, 'Music will play on the Bluetooth speaker');
 };
 WirelessOutputManager.prototype.removeBluetoothOutput = function () {
   var self = this;
@@ -285,9 +322,9 @@ WirelessOutputManager.prototype.removeBluetoothOutput = function () {
       return self.outputManager.removeOutput();
     }).then(function (result) {
       self.config.set('outputEnabled', false);
-      return result;
+      return self.refreshUI().then(function () { return result; });
     });
-  }, 'Bluetooth ALSA output removed');
+  }, 'Music will play on the default audio output');
 };
 
 WirelessOutputManager.prototype.runDiagnostics = function () {

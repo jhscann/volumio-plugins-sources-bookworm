@@ -30,12 +30,14 @@ The installer checks required base-system commands and reports the existing audi
 ## Pair and connect
 
 1. Open **Plugins → Wireless Output Manager**.
-2. Run diagnostics and review the detected audio stack.
-3. Enable the plugin and auto-reconnect, then save.
-4. Start Bluetooth if necessary and scan for devices.
-5. Select the speaker, save it as preferred, then pair, trust and connect it.
-6. If diagnostics show an existing BlueALSA sender, choose **Create BlueALSA output**.
-7. Confirm `womBluetooth` appears in audio diagnostics. Do not assume it is selectable in Playback Options unless the target Volumio build exposes it.
+2. Put the Bluetooth speaker in pairing mode.
+3. Select **Find Bluetooth speakers** and wait for discovery to finish.
+4. Choose the speaker under **Available speakers**.
+5. Select **Pair & connect**. The plugin powers on Bluetooth, pairs, trusts, connects and saves the speaker in one operation.
+6. Under **Choose where music plays**, select **Play on Bluetooth speaker**.
+7. Press Play after the route change completes.
+
+Previously paired speakers do not need pairing mode. Use **Reconnect speaker** instead. **Forget speaker** removes the BlueZ pairing, so pairing mode is required the next time it is added.
 
 Pairing modes that require a PIN or confirmation agent may need to be completed with `bluetoothctl` over SSH in this initial version.
 
@@ -43,11 +45,11 @@ Pairing modes that require a PIN or confirmation agent may need to be completed 
 
 When enabled, the plugin checks the preferred device after startup and every 15 seconds. It never spins in a tight loop or overlaps reconnect attempts. A missing or powered-off speaker is reported as unavailable and does not prevent plugin startup.
 
-Routing is deliberately manual. Choose **Use wireless output** to route Volumio through the connected preferred speaker, or **Use default output** to remove the plugin contribution and return to the hardware device already selected in Playback Options. Either button stops playback first and leaves it stopped; press Play after the switch completes. Auto-reconnect reconnects Bluetooth only; it never changes the selected audio route.
+Routing is deliberately manual. Choose **Play on Bluetooth speaker** to route Volumio through the connected saved speaker, or **Play on default audio output** to return to the hardware device selected in Playback Options. Either button stops playback first and leaves it stopped; press Play after the switch completes. The current track restarts from the beginning. Auto-reconnect reconnects Bluetooth only; it never changes the selected audio route.
 
 ## Volume
 
-Software volume is the default and Volumio's Playback Options mixer must also be set to **Software**. A hardware mixer still targets the underlying DAC and will not alter the redirected Bluetooth stream. Speaker, mixed and none are future-facing configuration choices; they do not yet add hardware-volume synchronization.
+Set **Playback Options → Mixer Type** to **Software** when using Bluetooth output. A hardware mixer targets the physical DAC and will not alter the redirected Bluetooth stream. If you return to the default DAC, you may switch back to its hardware mixer for normal DAC-controlled volume, but change it to Software again before using Bluetooth.
 
 ## Diagnostics and troubleshooting
 
