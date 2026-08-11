@@ -24,17 +24,25 @@ async function main() {
   assert.strictEqual(rejected, true, 'command runner must reject timed-out commands');
 
   var stopCalls = 0;
+  var seekCalls = [];
   var plugin = new WirelessOutputManager({
-    coreCommand: { volumioStop: function () { stopCalls += 1; } },
+    coreCommand: {
+      volumioGetState: function () { return { status: 'play', seek: 65432, duration: 240, uri: 'music/test.flac' }; },
+      volumioStop: function () { stopCalls += 1; },
+      volumioSeek: function (position) { seekCalls.push(position); }
+    },
     logger: {},
     configManager: {}
   });
+  plugin.log = { info: function () {}, warn: function () {} };
   var started = Date.now();
-  await plugin._stopPlaybackForRouting();
+  var snapshot = await plugin._stopPlaybackForRouting();
   assert.strictEqual(stopCalls, 1, 'manual route switch must stop playback');
   assert(Date.now() - started >= 900, 'manual route switch must allow MPD to release the PCM');
+  assert.strictEqual(snapshot.seek, 65432, 'manual route switch must capture seekable playback position');
+  await plugin._restorePlaybackPosition(snapshot);
+  assert.deepStrictEqual(seekCalls, [65432], 'manual route switch must restore playback position without playing');
 
-  plugin.log = { info: function () {} };
   plugin.outputManager = { getStatus: function () { return Promise.resolve({ configured: false }); } };
   plugin.config = { get: function () { return false; }, set: function () {} };
   var startPromise = plugin.onStart();
