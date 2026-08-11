@@ -41,6 +41,7 @@ async function main() {
   assert(Date.now() - started >= 900, 'manual route switch must allow MPD to release the PCM');
   assert.strictEqual(snapshot.seek, 65432, 'manual route switch must capture seekable playback position');
   await plugin._restorePlaybackPosition(snapshot);
+  await new Promise(function (resolve) { setTimeout(resolve, 350); });
   assert.deepStrictEqual(seekCalls, [65432], 'manual route switch must restore playback position without playing');
 
   plugin.outputManager = { getStatus: function () { return Promise.resolve({ configured: false }); } };

@@ -43,7 +43,7 @@ Pairing modes that require a PIN or confirmation agent may need to be completed 
 
 When enabled, the plugin checks the preferred device after startup and every 15 seconds. It never spins in a tight loop or overlaps reconnect attempts. A missing or powered-off speaker is reported as unavailable and does not prevent plugin startup.
 
-Routing is deliberately manual. Choose **Use wireless output** to route Volumio through the connected preferred speaker, or **Use default output** to remove the plugin contribution and return to the hardware device already selected in Playback Options. Either button captures the position of a seekable track, stops playback, changes the route, restores that position, and leaves playback stopped; press Play after the switch completes. Live streams and other non-seekable sources cannot preserve position. Auto-reconnect reconnects Bluetooth only; it never changes the selected audio route.
+Routing is deliberately manual. Choose **Use wireless output** to route Volumio through the connected preferred speaker, or **Use default output** to remove the plugin contribution and return to the hardware device already selected in Playback Options. Either button captures the position of a seekable track, stops playback, changes the route, and leaves playback stopped. When you press Play, the plugin waits for MPD to load the same track and then restores its position. The pending position expires after five minutes and is cancelled if a different track is selected. Live streams and other non-seekable sources cannot preserve position. Auto-reconnect reconnects Bluetooth only; it never changes the selected audio route.
 
 ## Volume
 

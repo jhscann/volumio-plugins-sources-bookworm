@@ -18,6 +18,7 @@ function WirelessOutputManager(context) {
   this.configManager = context.configManager;
   this.reconnectTimer = null;
   this.reconnectBusy = false;
+  this.positionRestoreTimer = null;
   this.lastError = '';
   this.lastDiagnostics = null;
   this.devices = [];
@@ -57,6 +58,7 @@ WirelessOutputManager.prototype.onStart = function () {
 WirelessOutputManager.prototype.onStop = function () {
   this.log.info('Stopping');
   this._clearReconnect();
+  this._clearPositionRestore();
   return libQ.resolve();
 };
 
@@ -75,7 +77,13 @@ WirelessOutputManager.prototype._clearReconnect = function () {
   this.reconnectTimer = null;
 };
 
+WirelessOutputManager.prototype._clearPositionRestore = function () {
+  if (this.positionRestoreTimer) clearInterval(this.positionRestoreTimer);
+  this.positionRestoreTimer = null;
+};
+
 WirelessOutputManager.prototype._stopPlaybackForRouting = function () {
+  this._clearPositionRestore();
   var snapshot = null;
   try {
     var state = this.commandRouter.volumioGetState();
@@ -104,16 +112,39 @@ WirelessOutputManager.prototype._restorePlaybackPosition = function (snapshot) {
     self.log.warn('Playback position was not restored because volumioSeek is unavailable');
     return Promise.resolve();
   }
-  // The ALSA rebuild restarts MPD. Allow its current queue item to settle,
-  // then seek without issuing Play so manual routing remains stopped.
-  return new Promise(function (resolve) { setTimeout(resolve, 750); }).then(function () {
+  // The ALSA rebuild leaves MPD with no current song. Keep routing manual and
+  // wait for the user to press Play; seek only after Volumio reports that the
+  // same track has actually been loaded by MPD.
+  var expiresAt = Date.now() + 300000;
+  self.log.info('Playback position restore armed for ' + Math.round(snapshot.seek) + ' ms');
+  self.positionRestoreTimer = setInterval(function () {
+    var state;
+    try {
+      state = self.commandRouter.volumioGetState();
+    } catch (error) {
+      return;
+    }
+    if (Date.now() >= expiresAt) {
+      self._clearPositionRestore();
+      self.log.warn('Playback position restore expired before Play was pressed');
+      return;
+    }
+    if (!state || state.status !== 'play' || state.seek === null || state.seek === undefined) return;
+    if (snapshot.uri && state.uri && state.uri !== snapshot.uri) {
+      self._clearPositionRestore();
+      self.log.info('Playback position restore cancelled because a different track was selected');
+      return;
+    }
+    self._clearPositionRestore();
     try {
       self.commandRouter.volumioSeek(Math.round(snapshot.seek));
       self.log.info('Restored playback position to ' + Math.round(snapshot.seek) + ' ms');
-    } catch (error) {
-      self.log.warn('Unable to restore playback position: ' + error.message);
+    } catch (seekError) {
+      self.log.warn('Unable to restore playback position: ' + seekError.message);
     }
-  });
+  }, 250);
+  if (self.positionRestoreTimer.unref) self.positionRestoreTimer.unref();
+  return Promise.resolve();
 };
 
 WirelessOutputManager.prototype._scheduleReconnect = function (delayMs) {
