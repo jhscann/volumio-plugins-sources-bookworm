@@ -59,8 +59,8 @@
         {"id": "runDiagnostics", "element": "button", "label": "TRANSLATE.RUN_DIAGNOSTICS", "onClick": {"type": "plugin", "endpoint": "system_hardware/wireless_output_manager", "method": "runDiagnostics", "data": []}},
         {"id": "exportDebugLog", "element": "button", "label": "TRANSLATE.EXPORT_DEBUG_LOG", "onClick": {"type": "plugin", "endpoint": "system_hardware/wireless_output_manager", "method": "exportDebugLog", "data": []}},
         {"id": "refreshUI", "element": "button", "label": "TRANSLATE.REFRESH_STATUS", "onClick": {"type": "controller", "endpoint": "system_hardware/wireless_output_manager", "method": "getUIConfig", "data": []}},
-        {"id": "diagnosticOutput", "element": "textarea", "label": "TRANSLATE.DIAGNOSTIC_OUTPUT", "value": ""},
-        {"id": "lastError", "element": "textarea", "label": "TRANSLATE.LAST_ERROR", "value": "None"}
+        {"id": "diagnosticOutput", "element": "textarea", "label": "TRANSLATE.DIAGNOSTIC_OUTPUT", "value": "", "hidden": false},
+        {"id": "lastError", "element": "textarea", "label": "TRANSLATE.LAST_ERROR", "value": "None", "hidden": false}
       ]
     }
   ]

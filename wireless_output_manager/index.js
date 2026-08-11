@@ -189,6 +189,8 @@ WirelessOutputManager.prototype.getUIConfig = function () {
     set('sections[2].content[2]', 'hidden', !preferred);
     set('sections[4].content[3]', 'value', self.lastDiagnostics ? JSON.stringify(self.lastDiagnostics, null, 2) : 'Run diagnostics to collect system state.');
     set('sections[4].content[4]', 'value', self.lastError || 'None');
+    set('sections[4].content[3]', 'hidden', !self.lastDiagnostics);
+    set('sections[4].content[4]', 'hidden', !self.lastError);
     return ui;
   });
 };
