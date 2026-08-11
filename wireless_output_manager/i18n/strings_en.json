@@ -18,6 +18,7 @@
   "FORGET_SPEAKER": "Forget speaker",
   "FORGET_SPEAKER_NOTE": "Forgetting removes the Bluetooth pairing. Pairing mode will be required to add it again.",
   "PREFERENCES": "Preferences",
+  "SAVE_PREFERENCES": "Save preferences",
   "AUTO_RECONNECT_SPEAKER": "Reconnect automatically",
   "AUTO_RECONNECT_NOTE": "Reconnects the saved speaker when it becomes available, but never changes the selected audio destination.",
   "DIAGNOSTICS_NOTE": "Troubleshooting tools and technical details.",

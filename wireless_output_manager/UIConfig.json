@@ -43,7 +43,7 @@
       "label": "TRANSLATE.PREFERENCES",
       "icon": "fa-cog",
       "onSave": {"type": "controller", "endpoint": "system_hardware/wireless_output_manager", "method": "saveSettings"},
-      "saveButton": {"label": "TRANSLATE.SAVE", "data": ["autoReconnect", "debugLogging"]},
+      "saveButton": {"label": "TRANSLATE.SAVE_PREFERENCES", "data": ["autoReconnect", "debugLogging"]},
       "content": [
         {"id": "autoReconnect", "element": "switch", "label": "TRANSLATE.AUTO_RECONNECT_SPEAKER", "description": "TRANSLATE.AUTO_RECONNECT_NOTE", "value": true},
         {"id": "debugLogging", "element": "switch", "label": "TRANSLATE.DEBUG_LOGGING", "value": false}
