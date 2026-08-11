@@ -76,17 +76,6 @@ WirelessOutputManager.prototype._clearReconnect = function () {
 };
 
 WirelessOutputManager.prototype._stopPlaybackForRouting = function () {
-  var snapshot = null;
-  try {
-    var state = this.commandRouter.volumioGetState();
-    var seek = Number(state && state.seek);
-    var duration = Number(state && state.duration);
-    if (Number.isFinite(seek) && seek > 0 && Number.isFinite(duration) && duration > 0) {
-      snapshot = { seek: seek, uri: state.uri || '', title: state.title || '' };
-    }
-  } catch (stateError) {
-    this.log.warn('Unable to capture playback position: ' + stateError.message);
-  }
   try {
     // Volumio 4's stop command is fire-and-forget. Do not chain its return
     // value; give MPD a short, bounded interval to release the current PCM.
@@ -94,26 +83,7 @@ WirelessOutputManager.prototype._stopPlaybackForRouting = function () {
   } catch (error) {
     return Promise.reject(new Error('Unable to stop playback before switching output: ' + error.message));
   }
-  return new Promise(function (resolve) { setTimeout(function () { resolve(snapshot); }, 1000); });
-};
-
-WirelessOutputManager.prototype._restorePlaybackPosition = function (snapshot) {
-  var self = this;
-  if (!snapshot || !Number.isFinite(snapshot.seek) || snapshot.seek <= 0) return Promise.resolve();
-  if (typeof self.commandRouter.volumioSeek !== 'function') {
-    self.log.warn('Playback position was not restored because volumioSeek is unavailable');
-    return Promise.resolve();
-  }
-  // The ALSA rebuild restarts MPD. Allow its current queue item to settle,
-  // then seek without issuing Play so manual routing remains stopped.
-  return new Promise(function (resolve) { setTimeout(resolve, 750); }).then(function () {
-    try {
-      self.commandRouter.volumioSeek(Math.round(snapshot.seek));
-      self.log.info('Restored playback position to ' + Math.round(snapshot.seek) + ' ms');
-    } catch (error) {
-      self.log.warn('Unable to restore playback position: ' + error.message);
-    }
-  });
+  return new Promise(function (resolve) { setTimeout(resolve, 1000); });
 };
 
 WirelessOutputManager.prototype._scheduleReconnect = function (delayMs) {
@@ -300,26 +270,22 @@ WirelessOutputManager.prototype.forgetDevice = function (data) {
 WirelessOutputManager.prototype.createBluetoothOutput = function () {
   var self = this;
   return self._action('Creating guarded BlueALSA output', function () {
-    var playbackSnapshot;
-    return self._stopPlaybackForRouting().then(function (snapshot) {
-      playbackSnapshot = snapshot;
+    return self._stopPlaybackForRouting().then(function () {
       return self.outputManager.createOutput(self.config.get('preferredDeviceMac'));
     }).then(function (result) {
       self.config.set('outputEnabled', true);
-      return self._restorePlaybackPosition(playbackSnapshot).then(function () { return result; });
+      return result;
     });
   }, 'Bluetooth ALSA output created');
 };
 WirelessOutputManager.prototype.removeBluetoothOutput = function () {
   var self = this;
   return self._action('Removing Bluetooth output', function () {
-    var playbackSnapshot;
-    return self._stopPlaybackForRouting().then(function (snapshot) {
-      playbackSnapshot = snapshot;
+    return self._stopPlaybackForRouting().then(function () {
       return self.outputManager.removeOutput();
     }).then(function (result) {
       self.config.set('outputEnabled', false);
-      return self._restorePlaybackPosition(playbackSnapshot).then(function () { return result; });
+      return result;
     });
   }, 'Bluetooth ALSA output removed');
 };
