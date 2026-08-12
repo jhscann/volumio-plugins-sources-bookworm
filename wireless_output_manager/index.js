@@ -279,17 +279,33 @@ WirelessOutputManager.prototype.pairAndConnectDevice = function (data) {
   var id = self._selected(data);
   if (!BluetoothAdapter.MAC_RE.test(id)) {
     self._toast('error', 'Find and select a Bluetooth speaker first');
-    return libQ.reject(new Error('Find and select a Bluetooth speaker first'));
+    return libQ.resolve({ success: false, error: 'Find and select a Bluetooth speaker first' });
   }
   var previousId = String(self.config.get('preferredDeviceMac') || '').toUpperCase();
   var changingSpeaker = BluetoothAdapter.MAC_RE.test(previousId) && previousId !== id;
+  var selected = data && data.preferredDevice;
+  if (Array.isArray(selected)) selected = selected[0];
+  var targetName = selected && typeof selected === 'object' ? selected.label : '';
+  targetName = String(targetName || id).replace(/\s+—.*$/, '').replace(/\s+\(audio\)$/, '');
   var successMessage = changingSpeaker
     ? 'Speaker changed and connected. Music is on the default output; choose Play on Bluetooth speaker when ready.'
     : 'Speaker paired, connected and saved';
-  return self._action('Pairing and connecting ' + id, async function () {
+  var routeChanged = false;
+  self.btLog.info('Pairing and connecting ' + id);
+  return Promise.resolve().then(async function () {
     self._clearReconnect();
     try {
       await self.bluetooth.powerOn();
+      // Preflight the target before changing a working route or disconnecting
+      // another speaker. An unavailable target is an expected UI outcome, not
+      // an exception that should escape into Volumio's controller.
+      await self.bluetooth.pair(id);
+      await self.bluetooth.trust(id);
+      var beforeConnect = await self.bluetooth.getDeviceInfo(id).catch(function () { return null; });
+      if (!beforeConnect || !beforeConnect.connected) await self.bluetooth.connect(id);
+      var info = await self.bluetooth.getDeviceInfo(id);
+      if (!info.connected) throw new Error('The selected speaker did not report a connected state');
+
       var knownDevices = await self._loadKnownDevices().catch(function () { return self.devices; });
       var otherConnectedAudio = knownDevices.filter(function (device) {
         return device.id !== id && device.connected && device.audioCapable === true;
@@ -300,37 +316,38 @@ WirelessOutputManager.prototype.pairAndConnectDevice = function (data) {
       }
       if (changingSpeaker || otherConnectedAudio.length) {
         await self._returnToDefaultIfWireless();
+        routeChanged = true;
       }
       for (var deviceIndex = 0; deviceIndex < otherConnectedAudio.length; deviceIndex += 1) {
         await self.bluetooth.disconnect(otherConnectedAudio[deviceIndex].id);
       }
-      await self.bluetooth.pair(id);
-      await self.bluetooth.trust(id);
-      var beforeConnect = await self.bluetooth.getDeviceInfo(id).catch(function () { return null; });
-      if (!beforeConnect || !beforeConnect.connected) await self.bluetooth.connect(id);
-      var info = await self.bluetooth.getDeviceInfo(id);
-      if (!info.connected) throw new Error('The selected speaker did not report a connected state');
       self.config.set('preferredDeviceMac', id);
       self.config.set('preferredDeviceName', info.name || id);
       self.config.set('enabled', true);
       await self._loadKnownDevices().catch(function () {});
       if (self.config.get('autoReconnect')) self._scheduleReconnect(15000);
       await self.refreshUI();
-      return info;
+      self.lastError = '';
+      self._toast('success', successMessage);
+      return { success: true, device: info };
     } catch (error) {
-      if (changingSpeaker) {
+      if (changingSpeaker && routeChanged) {
         await self.bluetooth.disconnect(id).catch(function () {});
         await self.bluetooth.connect(previousId).catch(function (restoreError) {
           self.btLog.warn('Unable to reconnect the previous speaker after a failed switch: ' + restoreError.message);
         });
-        if (self.config.get('enabled') && self.config.get('autoReconnect')) self._scheduleReconnect(15000);
-        await self.refreshUI().catch(function () {});
-        throw new Error('Could not switch speakers. The previous speaker remains selected and music is on the default output: ' + error.message);
       }
       if (self.config.get('enabled') && self.config.get('autoReconnect')) self._scheduleReconnect(15000);
-      throw error;
+      var message = routeChanged
+        ? 'Could not finish switching to ' + targetName + '. The previous speaker remains selected and music is on the default output.'
+        : 'Could not connect to ' + targetName + '. Turn it on and try again. The current speaker and audio route were not changed.';
+      self.lastError = message + ' ' + error.message;
+      self.btLog.warn(self.lastError);
+      self._toast('error', message);
+      await self.refreshUI().catch(function () {});
+      return { success: false, error: self.lastError, routeChanged: routeChanged };
     }
-  }, successMessage);
+  });
 };
 
 WirelessOutputManager.prototype.savePreferredDevice = function (data) {

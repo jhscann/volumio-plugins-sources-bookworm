@@ -136,8 +136,8 @@ async function main() {
     }
   };
   await switchPlugin.pairAndConnectDevice({ preferredDevice: [{ value: newId, label: 'Speaker B' }] });
+  assert(switchCalls.indexOf('connect-' + newId) < switchCalls.indexOf('default-output'), 'new speaker must connect before the working route changes');
   assert(switchCalls.indexOf('default-output') < switchCalls.indexOf('disconnect-' + oldId), 'speaker switching must return to default before disconnecting the old speaker');
-  assert(switchCalls.indexOf('disconnect-' + oldId) < switchCalls.indexOf('connect-' + newId), 'old speaker must disconnect before the new speaker connects');
   assert.strictEqual(switchState.preferredDeviceMac, newId, 'new speaker must be saved only after it connects');
   assert.strictEqual(switchState.preferredDeviceName, 'Speaker B');
   assert.strictEqual(switchState.outputEnabled, false, 'speaker switching must leave routing on the default output');
@@ -169,16 +169,13 @@ async function main() {
     switchCalls.push('connect-' + id);
     if (id === newId) throw new Error('connection refused');
   };
-  var switchFailed = false;
-  try {
-    await switchPlugin.pairAndConnectDevice({ preferredDevice: [{ value: newId, label: 'Speaker B' }] });
-  } catch (error) {
-    switchFailed = /previous speaker remains selected/.test(error.message);
-  }
-  assert.strictEqual(switchFailed, true, 'failed speaker switches must explain the retained selection');
+  var failedResult = await switchPlugin.pairAndConnectDevice({ preferredDevice: [{ value: newId, label: 'Speaker B' }] });
+  assert.strictEqual(failedResult.success, false, 'unavailable speakers must return a handled failure result');
+  assert(/current speaker and audio route were not changed/.test(failedResult.error), 'failed preflight must explain that the working route is preserved');
   assert.strictEqual(switchState.preferredDeviceMac, oldId, 'failed speaker switch must preserve the previous preference');
-  assert(switchCalls.indexOf('connect-' + oldId) !== -1, 'failed speaker switch must attempt to reconnect the old speaker');
-  assert.strictEqual(switchState.outputEnabled, false, 'failed speaker switch must remain safely on the default output');
+  assert.strictEqual(switchCalls.indexOf('default-output'), -1, 'failed preflight must not change the working route');
+  assert.strictEqual(switchCalls.indexOf('disconnect-' + oldId), -1, 'failed preflight must not disconnect the working speaker');
+  assert.strictEqual(switchState.outputEnabled, true, 'failed preflight must preserve active Bluetooth routing');
 
   var removedOutput = false;
   onboardingSaved.outputEnabled = true;
