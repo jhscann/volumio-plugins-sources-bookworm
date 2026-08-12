@@ -24,6 +24,21 @@ async function main() {
   ]);
   assert.throws(function () { adapter._mac('not-a-mac'); }, /valid Bluetooth device/);
 
+  var optionPlugin = new WirelessOutputManager({ coreCommand: {}, logger: {}, configManager: {} });
+  optionPlugin.config = { get: function () { return 'Living Room'; } };
+  optionPlugin.devices = [
+    { id: 'AA:BB:CC:DD:EE:04', name: 'Keyboard', connected: true, paired: true, audioCapable: false },
+    { id: 'AA:BB:CC:DD:EE:03', name: '', connected: false, paired: false, audioCapable: null },
+    { id: 'AA:BB:CC:DD:EE:02', name: 'Kitchen', connected: true, paired: true, audioCapable: true },
+    { id: 'AA:BB:CC:DD:EE:01', name: 'Living Room', connected: false, paired: true, audioCapable: true }
+  ];
+  var speakerOptions = optionPlugin._speakerOptions('AA:BB:CC:DD:EE:01');
+  assert.deepStrictEqual(speakerOptions.map(function (device) { return device.id; }), [
+    'AA:BB:CC:DD:EE:01', 'AA:BB:CC:DD:EE:02', 'AA:BB:CC:DD:EE:03'
+  ], 'speaker options must prioritize selected and connected audio devices, retain unidentified devices and hide known non-audio devices');
+  assert.strictEqual(optionPlugin._speakerOptionLabel(speakerOptions[0], 'AA:BB:CC:DD:EE:01'), 'Living Room — selected, paired, audio');
+  assert.strictEqual(optionPlugin._speakerOptionLabel(speakerOptions[2], 'AA:BB:CC:DD:EE:01'), 'AA:BB:CC:DD:EE:03 — unidentified device');
+
   var runner = new CommandRunner({ defaultTimeoutMs: 1000 });
   var ok = await runner.run(process.execPath, ['-e', 'process.stdout.write("ok")']);
   assert.strictEqual(ok.stdout, 'ok');
@@ -126,10 +141,29 @@ async function main() {
   assert.strictEqual(switchState.preferredDeviceName, 'Speaker B');
   assert.strictEqual(switchState.outputEnabled, false, 'speaker switching must leave routing on the default output');
 
+  switchState.preferredDeviceMac = newId;
+  switchState.preferredDeviceName = 'Speaker B';
+  switchState.outputEnabled = true;
+  switchCalls = [];
+  var extraAudioId = 'AA:BB:CC:DD:EE:03';
+  var nonAudioId = 'AA:BB:CC:DD:EE:04';
+  switchPlugin.bluetooth.listDevices = async function () {
+    return [
+      { id: newId, name: 'Speaker B', connected: true, paired: true, audioCapable: true },
+      { id: extraAudioId, name: 'Speaker C', connected: true, paired: true, audioCapable: true },
+      { id: nonAudioId, name: 'Keyboard', connected: true, paired: true, audioCapable: false }
+    ];
+  };
+  await switchPlugin.pairAndConnectDevice({ preferredDevice: [{ value: newId, label: 'Speaker B' }] });
+  assert(switchCalls.indexOf('default-output') !== -1, 'selecting the current speaker must return to default when another audio speaker is connected');
+  assert(switchCalls.indexOf('disconnect-' + extraAudioId) !== -1, 'other connected audio speakers must be disconnected');
+  assert.strictEqual(switchCalls.indexOf('disconnect-' + nonAudioId), -1, 'known non-audio Bluetooth devices must not be disconnected');
+
   switchState.preferredDeviceMac = oldId;
   switchState.preferredDeviceName = 'Speaker A';
   switchState.outputEnabled = true;
   switchCalls = [];
+  delete switchPlugin.bluetooth.listDevices;
   switchPlugin.bluetooth.connect = async function (id) {
     switchCalls.push('connect-' + id);
     if (id === newId) throw new Error('connection refused');

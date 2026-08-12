@@ -53,7 +53,7 @@ BluetoothAdapter.prototype._parseDeviceLines = function (text) {
 BluetoothAdapter.prototype.getDeviceInfo = async function (deviceId) {
   var mac = this._mac(deviceId);
   var result = await this._ctl(['info', mac]);
-  var info = { id: mac, name: '', paired: false, trusted: false, connected: false, audioCapable: false, uuids: [] };
+  var info = { id: mac, name: '', paired: false, trusted: false, connected: false, audioCapable: null, uuids: [] };
   result.stdout.split(/\r?\n/).forEach(function (line) {
     var match = line.match(/^\s*([^:]+):\s*(.*)$/);
     if (!match) return;
@@ -69,7 +69,9 @@ BluetoothAdapter.prototype.getDeviceInfo = async function (deviceId) {
       if (uuid) info.uuids.push(uuid.toLowerCase());
     }
   });
-  info.audioCapable = info.uuids.some(function (uuid) { return AUDIO_UUIDS.indexOf(uuid) !== -1; });
+  if (info.uuids.length) {
+    info.audioCapable = info.uuids.some(function (uuid) { return AUDIO_UUIDS.indexOf(uuid) !== -1; });
+  }
   return info;
 };
 

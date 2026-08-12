@@ -81,6 +81,16 @@ If the source checkout no longer exists, repeat the installation commands above 
 6. Under **Choose where music plays**, select **Play on Bluetooth speaker**.
 7. Wait for the route change to finish, then press Play.
 
+The speaker list shows the state BlueZ currently reports:
+
+- **selected**: the speaker saved by this plugin;
+- **connected**: an active Bluetooth connection exists;
+- **paired**: the system pairing is preserved;
+- **audio**: BlueZ has confirmed a supported audio profile;
+- **unidentified device**: BlueZ has not exposed enough profile information yet.
+
+Devices positively identified as non-audio are hidden from the speaker list. Unidentified devices remain visible because some speakers reveal their audio profile only after pairing. If more than one audio speaker is connected, the status text names them and explains how to resolve the conflict.
+
 To return to the output already selected in Volumio Playback Options, choose **Play on default audio output**, wait for the switch to finish, then press Play.
 
 ## Everyday controls
@@ -90,7 +100,7 @@ To return to the output already selected in Volumio Playback Options, choose **P
 - **Reconnect automatically** reconnects the saved speaker when it becomes available. It never changes the selected audio destination and does not provide automatic fallback when the speaker becomes unavailable.
 - **Reset speaker setup** returns to the default output and clears only this plugin's saved speaker and routing state. It preserves system-wide Bluetooth pairings so other Bluetooth plugins are not disrupted.
 
-To use a different speaker, repeat the search, selection and **Use selected speaker** workflow. The plugin returns active Bluetooth routing to the default output, disconnects the previous speaker without removing its pairing, and connects the newly selected speaker. The existing saved speaker is replaced only after the new speaker connects successfully. Choose **Play on Bluetooth speaker** afterward when you are ready to route music to it.
+To use a different speaker, repeat the search, selection and **Use selected speaker** workflow. The plugin returns active Bluetooth routing to the default output, disconnects every other connected device that BlueZ confirms is an audio speaker, and connects the newly selected speaker. All pairings are preserved, and confirmed non-audio Bluetooth devices are not touched. The existing saved speaker is replaced only after the new speaker connects successfully. Choose **Play on Bluetooth speaker** afterward when you are ready to route music to it.
 
 If the new speaker cannot connect, the previous speaker remains selected and the plugin attempts to reconnect it. Music remains routed to the default output so the UI never claims that audio was switched successfully.
 

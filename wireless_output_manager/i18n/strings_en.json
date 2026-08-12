@@ -6,7 +6,7 @@
   "DISCOVERY_INTRO": "Put your speaker in pairing mode, then search for nearby speakers.",
   "SEARCH_FOR_SPEAKERS": "Search for speakers",
   "CHOOSE_SPEAKER": "Choose a speaker",
-  "CHOOSE_SPEAKER_NOTE": "To change speakers, select another one and choose Use selected speaker. The current speaker will be disconnected but remain paired. Music returns to the default output until you choose Play on Bluetooth speaker.",
+  "CHOOSE_SPEAKER_NOTE": "Labels show selected, connected, paired and audio states. Known non-audio devices are hidden; unidentified devices remain available because some speakers reveal their audio capability only after pairing. Use selected speaker disconnects other connected audio speakers but preserves their pairings. Music stays on the default output until you choose Play on Bluetooth speaker.",
   "SEARCH_AGAIN": "Search again",
   "CANCEL": "Cancel",
   "BLUETOOTH_SPEAKER": "Bluetooth speaker",
