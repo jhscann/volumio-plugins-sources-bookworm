@@ -396,15 +396,24 @@ WirelessOutputManager.prototype.disconnectDevice = function (data) {
 };
 WirelessOutputManager.prototype.forgetDevice = function (data) {
   var self = this; var id = self._selected(data);
+  if (!BluetoothAdapter.MAC_RE.test(id)) {
+    self._toast('error', 'No selected Bluetooth device to forget');
+    return libQ.reject(new Error('No selected Bluetooth device to forget'));
+  }
   return self._action('Forgetting ' + id, async function () {
+    self._clearReconnect();
     await self._returnToDefaultIfWireless();
     var result = await self.bluetooth.forget(id);
     if (self.config.get('preferredDeviceMac') === id) {
-      self.config.set('preferredDeviceMac', ''); self.config.set('preferredDeviceName', '');
+      self.config.set('preferredDeviceMac', '');
+      self.config.set('preferredDeviceName', '');
+      self.config.set('enabled', false);
+      self.config.set('outputEnabled', false);
     }
+    self.devices = self.devices.filter(function (device) { return device.id !== id; });
     await self.refreshUI();
     return result;
-  }, 'Speaker forgotten');
+  }, 'Selected device forgotten; other Bluetooth pairings were preserved');
 };
 
 WirelessOutputManager.prototype.resetSpeakerSetup = function () {

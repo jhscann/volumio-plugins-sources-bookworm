@@ -36,6 +36,7 @@
       "content": [
         {"id": "connectDevice", "element": "button", "label": "TRANSLATE.RECONNECT_SPEAKER", "hidden": false, "onClick": {"type": "plugin", "endpoint": "system_hardware/wireless_output_manager", "method": "connectDevice", "data": []}},
         {"id": "disconnectDevice", "element": "button", "label": "TRANSLATE.DISCONNECT_SPEAKER", "hidden": false, "onClick": {"type": "plugin", "endpoint": "system_hardware/wireless_output_manager", "method": "disconnectDevice", "data": []}},
+        {"id": "forgetDevice", "element": "button", "label": "TRANSLATE.FORGET_SPEAKER", "description": "TRANSLATE.FORGET_SPEAKER_NOTE", "onClick": {"type": "plugin", "endpoint": "system_hardware/wireless_output_manager", "method": "forgetDevice", "data": []}},
         {"id": "resetSpeakerSetup", "element": "button", "label": "TRANSLATE.RESET_SPEAKER_SETUP", "description": "TRANSLATE.RESET_SPEAKER_SETUP_NOTE", "onClick": {"type": "plugin", "endpoint": "system_hardware/wireless_output_manager", "method": "resetSpeakerSetup", "data": []}}
       ]
     },

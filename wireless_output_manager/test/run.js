@@ -13,6 +13,7 @@ async function main() {
   assert(uiIds.indexOf('scanDevices') !== -1 && uiIds.indexOf('preferredDevice') !== -1, 'onboarding must expose discovery and speaker selection');
   assert(uiIds.indexOf('pairDevice') === -1 && uiIds.indexOf('trustDevice') === -1, 'low-level pairing controls must stay out of the main UI');
   assert(uiIds.indexOf('createOutput') !== -1 && uiIds.indexOf('removeOutput') !== -1, 'manual audio destination controls must remain available');
+  assert(uiIds.indexOf('forgetDevice') !== -1, 'selected-device pairing removal must be available');
   assert(uiIds.indexOf('resetSpeakerSetup') !== -1, 'safe plugin-only reset must remain available');
 
   var adapter = new BluetoothAdapter({
@@ -186,6 +187,29 @@ async function main() {
   await plugin._returnToDefaultIfWireless();
   assert.strictEqual(removedOutput, true, 'speaker removal must return active wireless routing to default');
   assert.strictEqual(onboardingSaved.outputEnabled, false);
+
+  var forgottenId = 'C4:30:18:EA:9D:EC';
+  var forgottenCalls = [];
+  onboardingSaved.preferredDeviceMac = forgottenId;
+  onboardingSaved.preferredDeviceName = 'JBL PartyBox 100';
+  onboardingSaved.enabled = true;
+  onboardingSaved.outputEnabled = true;
+  plugin.devices = [
+    { id: forgottenId, name: 'JBL PartyBox 100' },
+    { id: 'C0:38:96:A0:39:98', name: 'Sony' }
+  ];
+  plugin._clearReconnect = function () { forgottenCalls.push('clear-reconnect'); };
+  plugin._returnToDefaultIfWireless = async function () {
+    forgottenCalls.push('default-output');
+    onboardingSaved.outputEnabled = false;
+  };
+  plugin.bluetooth.forget = async function (id) { forgottenCalls.push('forget-' + id); };
+  plugin.refreshUI = function () { forgottenCalls.push('refresh'); return Promise.resolve(); };
+  await plugin.forgetDevice();
+  assert.deepStrictEqual(forgottenCalls, ['clear-reconnect', 'default-output', 'forget-' + forgottenId, 'refresh']);
+  assert.strictEqual(onboardingSaved.preferredDeviceMac, '');
+  assert.strictEqual(onboardingSaved.enabled, false);
+  assert.deepStrictEqual(plugin.devices, [{ id: 'C0:38:96:A0:39:98', name: 'Sony' }], 'forget must remove only the selected device from plugin state');
 
   onboardingSaved.preferredDeviceMac = 'C4:30:18:EA:9D:EC';
   onboardingSaved.preferredDeviceName = 'JBL PartyBox 100';
