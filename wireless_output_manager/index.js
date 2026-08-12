@@ -229,8 +229,8 @@ WirelessOutputManager.prototype.getUIConfig = function () {
     var outputEnabled = Boolean(self.config.get('outputEnabled'));
     var connectedAudio = options.filter(function (device) { return device.audioCapable === true && device.connected; });
     var connectedNames = connectedAudio.map(function (device) { return device.name || device.id; });
-    if (connectedAudio.length > 1) set('sections[0]', 'description', 'Selected speaker: ' + preferredName + '. Connected audio speakers: ' + connectedNames.join(', ') + '. Choose the speaker you want and select Use selected speaker; the others will disconnect but remain paired.');
-    else if (connected) set('sections[0]', 'description', preferredName + ' is selected and connected. To change speakers, search, choose another speaker, then select Use selected speaker. The current speaker stays paired.');
+    if (connectedAudio.length > 1) set('sections[0]', 'description', 'Selected: ' + preferredName + '. Also connected: ' + connectedNames.filter(function (name) { return name !== preferredName; }).join(', ') + '. Choose one speaker and select Use selected speaker. Other audio speakers will disconnect but remain paired; music will move to the default output until you choose Play on Bluetooth speaker.');
+    else if (connected) set('sections[0]', 'description', preferredName + ' is selected and connected. To change speakers: search, choose another speaker, then select Use selected speaker. The current speaker will disconnect but remain paired. Next, choose Play on Bluetooth speaker.');
     else if (paired) set('sections[0]', 'description', preferredName + ' is saved but disconnected. Use Reconnect speaker below, or search to choose another speaker.');
     else set('sections[0]', 'description', 'Put your speaker in pairing mode, select Search for speakers, choose it from the list, then select Use selected speaker.');
     set('sections[1]', 'hidden', !preferred);

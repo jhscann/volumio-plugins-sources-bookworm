@@ -91,6 +91,8 @@ The speaker list shows the state BlueZ currently reports:
 
 Devices positively identified as non-audio are hidden from the speaker list. Unidentified devices remain visible because some speakers reveal their audio profile only after pairing. If more than one audio speaker is connected, the status text names them and explains how to resolve the conflict.
 
+Speaker selection and audio routing are intentionally separate. **Use selected speaker** establishes which single Bluetooth speaker is connected and saved. **Play on Bluetooth speaker** then routes Volumio playback to that connected speaker. This keeps destination changes explicit and avoids automatic fallback or routing surprises.
+
 To return to the output already selected in Volumio Playback Options, choose **Play on default audio output**, wait for the switch to finish, then press Play.
 
 ## Everyday controls
