@@ -35,6 +35,7 @@ The plugin does **not** install BlueALSA, PulseAudio or PipeWire and does **not*
 - Audio routing is currently implemented only for an existing BlueALSA installation. Pairing and diagnostics may work on PulseAudio or PipeWire systems, but this version will not configure their audio routing.
 - Switching audio destinations stops playback. Wait for the switch to complete, then press Play. The current track restarts from the beginning.
 - Switching may take several seconds while MPD releases and reopens its audio device.
+- There is no automatic fallback when a Bluetooth speaker is turned off, disconnects or becomes unavailable. Select **Play on default audio output** manually, wait for the route change, then press Play.
 - Pairing that requires a PIN or confirmation agent may need to be completed with `bluetoothctl` over SSH.
 - With Volumio **Mixer Type** set to **Hardware**, Bluetooth is effectively sent at 100%; Volumio's volume control continues to apply to the physical DAC instead. Use **Software** mixer mode if you want Volumio to control Bluetooth playback volume.
 
@@ -86,10 +87,12 @@ To return to the output already selected in Volumio Playback Options, choose **P
 
 - **Reconnect speaker** reconnects the saved speaker without changing the audio destination.
 - **Disconnect speaker** returns active Bluetooth routing to the default output before disconnecting.
-- **Reconnect automatically** reconnects the saved speaker when it becomes available. It never changes the selected audio destination.
+- **Reconnect automatically** reconnects the saved speaker when it becomes available. It never changes the selected audio destination and does not provide automatic fallback when the speaker becomes unavailable.
 - **Reset speaker setup** returns to the default output and clears only this plugin's saved speaker and routing state. It preserves system-wide Bluetooth pairings so other Bluetooth plugins are not disrupted.
 
-To use a different speaker, repeat the search, selection and **Use selected speaker** workflow. The existing saved speaker is replaced only after the new speaker connects successfully.
+To use a different speaker, repeat the search, selection and **Use selected speaker** workflow. The plugin returns active Bluetooth routing to the default output, disconnects the previous speaker without removing its pairing, and connects the newly selected speaker. The existing saved speaker is replaced only after the new speaker connects successfully. Choose **Play on Bluetooth speaker** afterward when you are ready to route music to it.
+
+If the new speaker cannot connect, the previous speaker remains selected and the plugin attempts to reconnect it. Music remains routed to the default output so the UI never claims that audio was switched successfully.
 
 ## Diagnostics
 

@@ -185,14 +185,14 @@ WirelessOutputManager.prototype.getUIConfig = function () {
     var connected = Boolean(status.preferred && status.preferred.connected);
     var paired = Boolean(status.preferred && status.preferred.paired);
     var outputEnabled = Boolean(self.config.get('outputEnabled'));
-    if (connected) set('sections[0]', 'description', preferredName + ' is connected. Search again only if you want to add or change the speaker.');
+    if (connected) set('sections[0]', 'description', preferredName + ' is connected. To change speakers, search, select another speaker, then choose Use selected speaker. The current speaker stays paired.');
     else if (paired) set('sections[0]', 'description', preferredName + ' is saved but disconnected. Use Reconnect speaker below, or search to choose another speaker.');
-    else set('sections[0]', 'description', 'Put your speaker in pairing mode, select Search for speakers, choose it from the list, then select Pair and connect.');
+    else set('sections[0]', 'description', 'Put your speaker in pairing mode, select Search for speakers, choose it from the list, then select Use selected speaker.');
     set('sections[1]', 'hidden', !preferred);
     set('sections[1].content[0]', 'hidden', !connected);
     set('sections[1]', 'description', outputEnabled
-      ? 'Music is routed to ' + preferredName + '. Press Play after switching. With Mixer Type set to Hardware, Bluetooth is effectively sent at 100%; choose Software to control Bluetooth volume from Volumio.'
-      : 'Music is routed to the default device selected in Volumio Playback Options.');
+      ? 'Music is routed to ' + preferredName + '. If the speaker turns off or disconnects, there is no automatic fallback: choose Play on default audio output manually. With Mixer Type set to Hardware, Bluetooth is effectively sent at 100%; choose Software to control Bluetooth volume from Volumio.'
+      : 'Music is routed to the default device selected in Volumio Playback Options. To use the connected saved speaker, choose Play on Bluetooth speaker, then press Play.');
     set('sections[2]', 'hidden', !preferred);
     set('sections[2].content[0]', 'hidden', !preferred || connected);
     set('sections[2].content[1]', 'hidden', !connected);
@@ -223,20 +223,46 @@ WirelessOutputManager.prototype.pairAndConnectDevice = function (data) {
     self._toast('error', 'Find and select a Bluetooth speaker first');
     return libQ.reject(new Error('Find and select a Bluetooth speaker first'));
   }
+  var previousId = String(self.config.get('preferredDeviceMac') || '').toUpperCase();
+  var changingSpeaker = BluetoothAdapter.MAC_RE.test(previousId) && previousId !== id;
+  var successMessage = changingSpeaker
+    ? 'Speaker changed and connected. Music is on the default output; choose Play on Bluetooth speaker when ready.'
+    : 'Speaker paired, connected and saved';
   return self._action('Pairing and connecting ' + id, async function () {
-    await self.bluetooth.powerOn();
-    await self.bluetooth.pair(id);
-    await self.bluetooth.trust(id);
-    var beforeConnect = await self.bluetooth.getDeviceInfo(id).catch(function () { return null; });
-    if (!beforeConnect || !beforeConnect.connected) await self.bluetooth.connect(id);
-    var info = await self.bluetooth.getDeviceInfo(id);
-    self.config.set('preferredDeviceMac', id);
-    self.config.set('preferredDeviceName', info.name || id);
-    self.config.set('enabled', true);
-    if (self.config.get('autoReconnect')) self._scheduleReconnect(15000);
-    await self.refreshUI();
-    return info;
-  }, 'Speaker paired, connected and saved');
+    self._clearReconnect();
+    try {
+      await self.bluetooth.powerOn();
+      if (changingSpeaker) {
+        await self._returnToDefaultIfWireless();
+        var previousInfo = await self.bluetooth.getDeviceInfo(previousId).catch(function () { return null; });
+        if (previousInfo && previousInfo.connected) await self.bluetooth.disconnect(previousId);
+      }
+      await self.bluetooth.pair(id);
+      await self.bluetooth.trust(id);
+      var beforeConnect = await self.bluetooth.getDeviceInfo(id).catch(function () { return null; });
+      if (!beforeConnect || !beforeConnect.connected) await self.bluetooth.connect(id);
+      var info = await self.bluetooth.getDeviceInfo(id);
+      if (!info.connected) throw new Error('The selected speaker did not report a connected state');
+      self.config.set('preferredDeviceMac', id);
+      self.config.set('preferredDeviceName', info.name || id);
+      self.config.set('enabled', true);
+      if (self.config.get('autoReconnect')) self._scheduleReconnect(15000);
+      await self.refreshUI();
+      return info;
+    } catch (error) {
+      if (changingSpeaker) {
+        await self.bluetooth.disconnect(id).catch(function () {});
+        await self.bluetooth.connect(previousId).catch(function (restoreError) {
+          self.btLog.warn('Unable to reconnect the previous speaker after a failed switch: ' + restoreError.message);
+        });
+        if (self.config.get('enabled') && self.config.get('autoReconnect')) self._scheduleReconnect(15000);
+        await self.refreshUI().catch(function () {});
+        throw new Error('Could not switch speakers. The previous speaker remains selected and music is on the default output: ' + error.message);
+      }
+      if (self.config.get('enabled') && self.config.get('autoReconnect')) self._scheduleReconnect(15000);
+      throw error;
+    }
+  }, successMessage);
 };
 
 WirelessOutputManager.prototype.savePreferredDevice = function (data) {

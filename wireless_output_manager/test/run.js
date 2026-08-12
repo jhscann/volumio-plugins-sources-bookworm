@@ -82,6 +82,69 @@ async function main() {
   assert.strictEqual(onboardingSaved.preferredDeviceName, 'JBL PartyBox 100');
   assert.strictEqual(onboardingSaved.enabled, true, 'successful onboarding must enable reconnect management');
 
+  var oldId = 'AA:BB:CC:DD:EE:01';
+  var newId = 'AA:BB:CC:DD:EE:02';
+  var switchState = {
+    preferredDeviceMac: oldId,
+    preferredDeviceName: 'Speaker A',
+    outputEnabled: true,
+    enabled: true,
+    autoReconnect: true
+  };
+  var switchCalls = [];
+  var switchPlugin = new WirelessOutputManager({ coreCommand: {}, logger: {}, configManager: {} });
+  switchPlugin.btLog = { info: function () {}, warn: function () {}, error: function () {} };
+  switchPlugin._toast = function () {};
+  switchPlugin.config = {
+    get: function (key) { return switchState[key]; },
+    set: function (key, value) { switchState[key] = value; }
+  };
+  switchPlugin._clearReconnect = function () { switchCalls.push('clear-reconnect'); };
+  switchPlugin._scheduleReconnect = function () { switchCalls.push('schedule-reconnect'); };
+  switchPlugin._returnToDefaultIfWireless = async function () {
+    switchCalls.push('default-output');
+    switchState.outputEnabled = false;
+  };
+  switchPlugin.refreshUI = function () { switchCalls.push('refresh'); return Promise.resolve(); };
+  switchPlugin.bluetooth = {
+    powerOn: async function () { switchCalls.push('power'); },
+    pair: async function (id) { switchCalls.push('pair-' + id); },
+    trust: async function (id) { switchCalls.push('trust-' + id); },
+    connect: async function (id) { switchCalls.push('connect-' + id); },
+    disconnect: async function (id) { switchCalls.push('disconnect-' + id); },
+    getDeviceInfo: async function (id) {
+      switchCalls.push('info-' + id);
+      return id === oldId
+        ? { id: id, name: 'Speaker A', connected: true }
+        : { id: id, name: 'Speaker B', connected: switchCalls.indexOf('connect-' + newId) !== -1 };
+    }
+  };
+  await switchPlugin.pairAndConnectDevice({ preferredDevice: [{ value: newId, label: 'Speaker B' }] });
+  assert(switchCalls.indexOf('default-output') < switchCalls.indexOf('disconnect-' + oldId), 'speaker switching must return to default before disconnecting the old speaker');
+  assert(switchCalls.indexOf('disconnect-' + oldId) < switchCalls.indexOf('connect-' + newId), 'old speaker must disconnect before the new speaker connects');
+  assert.strictEqual(switchState.preferredDeviceMac, newId, 'new speaker must be saved only after it connects');
+  assert.strictEqual(switchState.preferredDeviceName, 'Speaker B');
+  assert.strictEqual(switchState.outputEnabled, false, 'speaker switching must leave routing on the default output');
+
+  switchState.preferredDeviceMac = oldId;
+  switchState.preferredDeviceName = 'Speaker A';
+  switchState.outputEnabled = true;
+  switchCalls = [];
+  switchPlugin.bluetooth.connect = async function (id) {
+    switchCalls.push('connect-' + id);
+    if (id === newId) throw new Error('connection refused');
+  };
+  var switchFailed = false;
+  try {
+    await switchPlugin.pairAndConnectDevice({ preferredDevice: [{ value: newId, label: 'Speaker B' }] });
+  } catch (error) {
+    switchFailed = /previous speaker remains selected/.test(error.message);
+  }
+  assert.strictEqual(switchFailed, true, 'failed speaker switches must explain the retained selection');
+  assert.strictEqual(switchState.preferredDeviceMac, oldId, 'failed speaker switch must preserve the previous preference');
+  assert(switchCalls.indexOf('connect-' + oldId) !== -1, 'failed speaker switch must attempt to reconnect the old speaker');
+  assert.strictEqual(switchState.outputEnabled, false, 'failed speaker switch must remain safely on the default output');
+
   var removedOutput = false;
   onboardingSaved.outputEnabled = true;
   plugin._stopPlaybackForRouting = function () { return Promise.resolve(); };
