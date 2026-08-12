@@ -99,7 +99,7 @@ To return to the output already selected in Volumio Playback Options, choose **P
 
 - **Reconnect speaker** reconnects the saved speaker without changing the audio destination.
 - **Disconnect speaker** returns active Bluetooth routing to the default output before disconnecting.
-- **Forget selected device** returns to the default output, disconnects the selected device and removes its system Bluetooth pairing. Pairing mode will be required to add that device again. Other paired devices are not affected.
+- **Paired audio devices → Forget selected device** removes any listed audio device's system Bluetooth pairing, even when that device is switched off or disconnected. If it is the active selected device, the plugin returns to the default output and clears the selection first. Pairing mode will be required to add it again. Other paired devices are not affected, and confirmed non-audio devices are not offered in this list.
 - **Reconnect automatically** reconnects the saved speaker when it becomes available. It never changes the selected audio destination and does not provide automatic fallback when the speaker becomes unavailable.
 - **Reset speaker setup** returns to the default output and clears only this plugin's saved speaker and routing state. It preserves system-wide Bluetooth pairings so other Bluetooth plugins are not disrupted.
 

@@ -238,9 +238,22 @@ WirelessOutputManager.prototype.getUIConfig = function () {
     set('sections[1]', 'description', outputEnabled
       ? 'Music is routed to ' + preferredName + '. If the speaker turns off or disconnects, there is no automatic fallback: choose Play on default audio output manually. With Mixer Type set to Hardware, Bluetooth is effectively sent at 100%; choose Software to control Bluetooth volume from Volumio.'
       : 'Music is routed to the default device selected in Volumio Playback Options. To use the connected saved speaker, choose Play on Bluetooth speaker, then press Play.');
-    set('sections[2]', 'hidden', !preferred);
+    var pairedAudio = options.filter(function (device) { return device.paired && device.audioCapable === true; });
+    set('sections[2]', 'hidden', !preferred && pairedAudio.length === 0);
     set('sections[2].content[0]', 'hidden', !preferred || connected);
     set('sections[2].content[1]', 'hidden', !connected);
+    pairedAudio.forEach(function (device) {
+      self.configManager.pushUIConfigParam(ui, 'sections[2].content[2].options', {
+        value: device.id,
+        label: self._speakerOptionLabel(device, preferred)
+      });
+    });
+    set('sections[2].content[2]', 'value', {
+      value: '',
+      label: pairedAudio.length ? 'Select a paired audio device' : 'No paired audio devices'
+    });
+    set('sections[2].content[2]', 'hidden', pairedAudio.length === 0);
+    set('sections[2].content[3]', 'hidden', !preferred);
     set('sections[4].content[3]', 'value', self.lastDiagnostics ? JSON.stringify(self.lastDiagnostics, null, 2) : 'Run diagnostics to collect system state.');
     set('sections[4].content[4]', 'value', self.lastError || 'None');
     set('sections[4].content[3]', 'hidden', !self.lastDiagnostics);
@@ -395,16 +408,23 @@ WirelessOutputManager.prototype.disconnectDevice = function (data) {
   }, 'Speaker disconnected');
 };
 WirelessOutputManager.prototype.forgetDevice = function (data) {
-  var self = this; var id = self._selected(data);
+  var self = this;
+  var selected = data && data.pairedDeviceToForget !== undefined ? data.pairedDeviceToForget : data;
+  if (Array.isArray(selected)) selected = selected[0];
+  if (selected && typeof selected === 'object') selected = selected.value;
+  var id = String(selected || '').toUpperCase();
   if (!BluetoothAdapter.MAC_RE.test(id)) {
-    self._toast('error', 'No selected Bluetooth device to forget');
-    return libQ.reject(new Error('No selected Bluetooth device to forget'));
+    self._toast('error', 'Select a paired audio device to forget');
+    return libQ.reject(new Error('Select a paired audio device to forget'));
   }
   return self._action('Forgetting ' + id, async function () {
-    self._clearReconnect();
-    await self._returnToDefaultIfWireless();
+    var isPreferred = String(self.config.get('preferredDeviceMac') || '').toUpperCase() === id;
+    if (isPreferred) {
+      self._clearReconnect();
+      await self._returnToDefaultIfWireless();
+    }
     var result = await self.bluetooth.forget(id);
-    if (self.config.get('preferredDeviceMac') === id) {
+    if (isPreferred) {
       self.config.set('preferredDeviceMac', '');
       self.config.set('preferredDeviceName', '');
       self.config.set('enabled', false);

@@ -13,7 +13,7 @@ async function main() {
   assert(uiIds.indexOf('scanDevices') !== -1 && uiIds.indexOf('preferredDevice') !== -1, 'onboarding must expose discovery and speaker selection');
   assert(uiIds.indexOf('pairDevice') === -1 && uiIds.indexOf('trustDevice') === -1, 'low-level pairing controls must stay out of the main UI');
   assert(uiIds.indexOf('createOutput') !== -1 && uiIds.indexOf('removeOutput') !== -1, 'manual audio destination controls must remain available');
-  assert(uiIds.indexOf('forgetDevice') !== -1, 'selected-device pairing removal must be available');
+  assert(uiIds.indexOf('pairedDeviceToForget') !== -1, 'paired-device selection must be available for pairing removal');
   assert(uiIds.indexOf('resetSpeakerSetup') !== -1, 'safe plugin-only reset must remain available');
 
   var adapter = new BluetoothAdapter({
@@ -205,11 +205,21 @@ async function main() {
   };
   plugin.bluetooth.forget = async function (id) { forgottenCalls.push('forget-' + id); };
   plugin.refreshUI = function () { forgottenCalls.push('refresh'); return Promise.resolve(); };
-  await plugin.forgetDevice();
+  await plugin.forgetDevice({ pairedDeviceToForget: [{ value: forgottenId, label: 'JBL PartyBox 100' }] });
   assert.deepStrictEqual(forgottenCalls, ['clear-reconnect', 'default-output', 'forget-' + forgottenId, 'refresh']);
   assert.strictEqual(onboardingSaved.preferredDeviceMac, '');
   assert.strictEqual(onboardingSaved.enabled, false);
   assert.deepStrictEqual(plugin.devices, [{ id: 'C0:38:96:A0:39:98', name: 'Sony' }], 'forget must remove only the selected device from plugin state');
+
+  var disconnectedId = 'C0:38:96:A0:39:98';
+  forgottenCalls = [];
+  onboardingSaved.preferredDeviceMac = forgottenId;
+  onboardingSaved.preferredDeviceName = 'JBL PartyBox 100';
+  onboardingSaved.enabled = true;
+  plugin.devices = [{ id: disconnectedId, name: 'Sony', paired: true, connected: false, audioCapable: true }];
+  await plugin.forgetDevice({ pairedDeviceToForget: [{ value: disconnectedId, label: 'Sony' }] });
+  assert.deepStrictEqual(forgottenCalls, ['forget-' + disconnectedId, 'refresh'], 'forgetting a disconnected non-selected device must not change routing or reconnect state');
+  assert.strictEqual(onboardingSaved.preferredDeviceMac, forgottenId, 'forgetting another device must preserve the selected speaker');
 
   onboardingSaved.preferredDeviceMac = 'C4:30:18:EA:9D:EC';
   onboardingSaved.preferredDeviceName = 'JBL PartyBox 100';
@@ -252,9 +262,17 @@ async function main() {
   uiValues.preferredDeviceMac = '';
   uiValues.preferredDeviceName = '';
   plugin.bluetooth.getStatus = async function () { return { preferred: null }; };
+  plugin.devices = [];
   await plugin.getUIConfig();
   assert.strictEqual(uiWrites['sections[1].hidden'], true, 'audio destination must hide until a speaker is saved');
   assert.strictEqual(uiWrites['sections[2].hidden'], true, 'speaker management must hide until a speaker is saved');
+
+  uiWrites = {};
+  plugin.devices = [{ id: 'AA:BB:CC:DD:EE:02', name: 'Kitchen', paired: true, connected: false, audioCapable: true }];
+  await plugin.getUIConfig();
+  assert.strictEqual(uiWrites['sections[2].hidden'], false, 'paired-device management must remain visible without a preferred speaker');
+  assert.strictEqual(uiWrites['sections[2].content[2].hidden'], false, 'paired audio selector must show for disconnected paired devices');
+  assert.strictEqual(uiWrites['sections[2].content[3].hidden'], true, 'plugin-only reset must hide when no speaker is selected');
   console.log('All tests passed');
 }
 
