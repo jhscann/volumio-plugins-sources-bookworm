@@ -7,7 +7,7 @@ PLUGIN_NAME="Wireless Output Manager"
 echo "[$PLUGIN_NAME] Checking Volumio 4 prerequisites"
 
 missing_required=0
-for command_name in bluetoothctl systemctl aplay node; do
+for command_name in bluetoothctl busctl systemctl aplay node; do
   if ! command -v "$command_name" >/dev/null 2>&1; then
     echo "[$PLUGIN_NAME] Required command is missing: $command_name"
     missing_required=1

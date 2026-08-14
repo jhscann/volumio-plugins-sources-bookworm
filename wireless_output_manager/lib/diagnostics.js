@@ -36,8 +36,9 @@ Diagnostics.prototype.environment = function () {
 };
 Diagnostics.prototype.bluetooth = function () {
   return this._collect([
-    ['rfkill', 'list', 'bluetooth'], ['bluetoothctl', 'show'], ['bluetoothctl', 'devices'],
+    ['rfkill', 'list', 'bluetooth'], ['bluetoothctl', 'list'], ['bluetoothctl', 'show'], ['bluetoothctl', 'devices'],
     ['bluetoothctl', 'devices', 'Paired'], ['systemctl', 'status', 'bluetooth', '--no-pager'],
+    ['busctl', '--system', 'tree', 'org.bluez'],
     ['journalctl', '-u', 'bluetooth', '--since', '30 minutes ago', '--no-pager']
   ]);
 };

@@ -24,6 +24,116 @@ async function main() {
     { id: 'AA:BB:CC:DD:EE:FF', name: 'Living Room' }
   ]);
   assert.throws(function () { adapter._mac('not-a-mac'); }, /valid Bluetooth device/);
+  adapter._bus = async function () {
+    return { stdout: '└─/org/bluez\n  ├─/org/bluez/hci0\n  │ └─/org/bluez/hci0/dev_A0_4A_5E_D9_98_F5\n  └─/org/bluez/hci1/dev_C4_30_18_EA_9D_EC', exitCode: 0 };
+  };
+  assert.deepStrictEqual(await adapter._listDevicePaths(), [
+    '/org/bluez/hci0/dev_A0_4A_5E_D9_98_F5',
+    '/org/bluez/hci1/dev_C4_30_18_EA_9D_EC'
+  ], 'BlueZ tree parsing must find device objects on every controller');
+
+  var speakerMac = 'C4:30:18:EA:9D:EC';
+  var dialMac = 'A0:4A:5E:D9:98:F5';
+  var builtInPath = '/org/bluez/hci1/dev_C4_30_18_EA_9D_EC';
+  var usbDialPath = '/org/bluez/hci0/dev_A0_4A_5E_D9_98_F5';
+  var busCalls = [];
+  var multiAdapter = new BluetoothAdapter({
+    runner: { run: function (command, args) {
+      busCalls.push({ command: command, args: args });
+      return Promise.resolve({ stdout: '', stderr: '', exitCode: 0 });
+    } },
+    logger: { info: function () {}, warn: function () {}, error: function () {} }
+  });
+  multiAdapter._listDevicePaths = async function () { return [usbDialPath, builtInPath]; };
+  multiAdapter._deviceFromPath = async function (path) {
+    if (path === builtInPath) {
+      return {
+        id: speakerMac, name: 'JBL PartyBox 100', paired: true, bonded: true,
+        trusted: true, connected: false, audioCapable: true, objectPath: path,
+        adapterPath: '/org/bluez/hci1', adapterAddress: '2C:CF:67:19:A4:42'
+      };
+    }
+    return {
+      id: dialMac, name: 'Surface Dial', paired: true, bonded: true,
+      trusted: true, connected: true, audioCapable: false, objectPath: path,
+      adapterPath: '/org/bluez/hci0', adapterAddress: '3C:78:95:C9:CC:29'
+    };
+  };
+  multiAdapter._getProperty = async function () { return true; };
+  var resolvedSpeaker = await multiAdapter.resolveDevice(speakerMac);
+  assert.strictEqual(resolvedSpeaker.objectPath, builtInPath, 'speaker lookup must cross all adapters rather than use the default adapter');
+  await multiAdapter.connect(speakerMac);
+  var connectCall = busCalls.find(function (call) { return call.args.indexOf('Connect') !== -1; });
+  assert(connectCall, 'disconnected speaker must receive a Device1.Connect call');
+  assert.strictEqual(connectCall.args[3], builtInPath, 'connect must target the resolved speaker object after hci numbering changes');
+  assert.strictEqual(busCalls.some(function (call) { return call.args.indexOf(usbDialPath) !== -1; }), false,
+    'speaker connection must not operate on the Surface Dial object');
+
+  busCalls = [];
+  await multiAdapter.forget(speakerMac);
+  var forgetCall = busCalls.find(function (call) { return call.args.indexOf('RemoveDevice') !== -1; });
+  assert(forgetCall, 'forget must call Adapter1.RemoveDevice');
+  assert.strictEqual(forgetCall.args[3], '/org/bluez/hci1', 'forget must target the speaker owning adapter');
+  assert.strictEqual(forgetCall.args[7], builtInPath, 'forget must remove only the resolved speaker object');
+  assert.strictEqual(forgetCall.args.indexOf(usbDialPath), -1, 'forget must not operate on the Surface Dial object');
+
+  busCalls = [];
+  await Promise.all([multiAdapter.connect(speakerMac), multiAdapter.connect(speakerMac)]);
+  assert.strictEqual(busCalls.filter(function (call) { return call.args.indexOf('Connect') !== -1; }).length, 1,
+    'overlapping requests must share one bounded Device1.Connect attempt');
+
+  busCalls = [];
+  multiAdapter._deviceFromPath = async function (path) {
+    var pairedOwner = path.indexOf('hci1') !== -1;
+    return {
+      id: speakerMac, name: 'JBL PartyBox 100', paired: pairedOwner, bonded: pairedOwner,
+      trusted: pairedOwner, connected: !pairedOwner, audioCapable: true, objectPath: path,
+      adapterPath: pairedOwner ? '/org/bluez/hci1' : '/org/bluez/hci0',
+      adapterAddress: pairedOwner ? '2C:CF:67:19:A4:42' : '3C:78:95:C9:CC:29'
+    };
+  };
+  multiAdapter._listDevicePaths = async function () {
+    return ['/org/bluez/hci0/dev_C4_30_18_EA_9D_EC', builtInPath];
+  };
+  resolvedSpeaker = await multiAdapter.resolveDevice(speakerMac);
+  assert.strictEqual(resolvedSpeaker.objectPath, builtInPath,
+    'paired and bonded device object must win over an unpaired connected duplicate');
+
+  multiAdapter._deviceFromPath = async function (path) {
+    return {
+      id: speakerMac, name: 'JBL PartyBox 100', paired: true, bonded: true,
+      trusted: true, connected: true, audioCapable: true, objectPath: path,
+      adapterPath: '/org/bluez/hci1', adapterAddress: '2C:CF:67:19:A4:42'
+    };
+  };
+  busCalls = [];
+  await multiAdapter.connect(speakerMac);
+  assert.strictEqual(busCalls.length, 0, 'already-connected speaker must not be reconnected');
+
+  multiAdapter._listDevicePaths = async function () { return [usbDialPath]; };
+  await assert.rejects(multiAdapter.resolveDevice(speakerMac), /not available on any Bluetooth adapter/,
+    'missing speaker object must produce a clear bounded failure');
+
+  multiAdapter._listDevicePaths = async function () { return [builtInPath]; };
+  multiAdapter._deviceFromPath = async function () {
+    return {
+      id: speakerMac, name: 'JBL PartyBox 100', paired: true, bonded: true,
+      trusted: true, connected: false, audioCapable: true, objectPath: builtInPath,
+      adapterPath: '/org/bluez/hci1', adapterAddress: '2C:CF:67:19:A4:42'
+    };
+  };
+  var failedConnects = 0;
+  multiAdapter._bus = async function (args) {
+    if (args.indexOf('Connect') !== -1) {
+      failedConnects += 1;
+      throw new Error('connection failed');
+    }
+    return { stdout: 'b true', exitCode: 0 };
+  };
+  await assert.rejects(Promise.all([multiAdapter.connect(speakerMac), multiAdapter.connect(speakerMac)]), /connection failed/);
+  assert.strictEqual(failedConnects, 1, 'a failed overlapping connection must still make only one attempt');
+  await assert.rejects(multiAdapter.connect(speakerMac), /connection failed/);
+  assert.strictEqual(failedConnects, 2, 'connection lock must clear after failure so a later bounded retry can run');
 
   var optionPlugin = new WirelessOutputManager({ coreCommand: {}, logger: {}, configManager: {} });
   optionPlugin.config = { get: function () { return 'Living Room'; } };

@@ -27,6 +27,7 @@ Other Volumio 4 devices, Bluetooth speakers and audio configurations remain unte
 - verification and rollback when the ALSA contribution cannot be exposed;
 - a plugin-only setup reset that preserves system Bluetooth pairings;
 - conservative uninstall behavior that preserves pairings, packages and MPD configuration.
+- runtime resolution of a paired speaker's owning Bluetooth controller, including systems where `hci0` and `hci1` change across reboots.
 
 The plugin does **not** install BlueALSA, PulseAudio or PipeWire and does **not** edit `/etc/mpd.conf` directly.
 
@@ -37,6 +38,7 @@ The plugin does **not** install BlueALSA, PulseAudio or PipeWire and does **not*
 - Switching may take several seconds while MPD releases and reopens its audio device.
 - There is no automatic fallback when a Bluetooth speaker is turned off, disconnects or becomes unavailable. Select **Play on default audio output** manually, wait for the route change, then press Play.
 - Pairing that requires a PIN or confirmation agent may need to be completed with `bluetoothctl` over SSH.
+- On systems with multiple Bluetooth controllers, reconnect, disconnect, trust and forget operations target the BlueZ device object that owns the pairing. Controller indexes such as `hci0` are deliberately not saved because Linux may renumber them after reboot. User-initiated discovery still follows the controller selected by BlueZ, so advanced first-time pairing arrangements may require selecting the intended controller in `bluetoothctl`.
 - With Volumio **Mixer Type** set to **Hardware**, Bluetooth is effectively sent at 100%; Volumio's volume control continues to apply to the physical DAC instead. Use **Software** mixer mode if you want Volumio to control Bluetooth playback volume.
 
 ## Install from the forum preview branch
@@ -119,10 +121,12 @@ The report contains command output but no plugin secrets. Useful manual checks i
 
 ```bash
 bluetoothctl show
+bluetoothctl list
 bluetoothctl devices
 bluetoothctl devices Paired
 bluetoothctl devices Connected
 bluetoothctl info <MAC>
+busctl --system tree org.bluez
 systemctl status bluetooth --no-pager
 rfkill list bluetooth
 aplay -L
