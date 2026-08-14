@@ -37,6 +37,10 @@ Enable the plugin, open Settings, put the Dial into pairing mode, choose **Scan 
 
 `install.sh` creates `/etc/udev/rules.d/99-volumio-surface-dial.rules`, refusing to overwrite an unrelated file at that path. `uninstall.sh` removes it only when marked as owned by this plugin. Bluetooth and Python packages are not removed because they may be shared by Volumio or other plugins. The plugin does not modify `/volumio` or `/myvolumio`.
 
+## Known limitation
+
+Surface Dial sleep/reconnect activity may interrupt Bluetooth audio when Surface Dial and Wireless Output Manager share the same Bluetooth adapter. If playback stutters, disable the Surface Dial plugin. Separating the Dial and speaker onto different adapters prevented the interruption in one Raspberry Pi/Volumio 4 test, but Wireless Output Manager may need explicit adapter selection to reconnect its speaker after reboot.
+
 ## Development
 
 Canonical development repository: https://github.com/jhscann/volumio-surface-dial
