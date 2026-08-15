@@ -45,7 +45,8 @@ Diagnostics.prototype.bluetooth = function () {
 Diagnostics.prototype.audio = function () {
   return this._collect([
     ['aplay', '-L'], ['aplay', '-l'], ['cat', '/proc/asound/cards'],
-    ['systemctl', 'status', 'bluealsa', '--no-pager'], ['bluealsa-aplay', '-L'],
+    ['systemctl', 'status', 'bluealsa', '--no-pager'], ['systemctl', 'cat', 'bluealsa', '--no-pager'],
+    ['bluealsa-cli', 'status'], ['bluealsa-cli', 'list-pcms'], ['bluealsa-aplay', '-L'],
     ['pactl', 'info'], ['pactl', 'list', 'short', 'sinks'], ['pw-cli', 'info', 'all']
   ]);
 };

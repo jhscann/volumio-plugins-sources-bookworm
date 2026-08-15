@@ -5,6 +5,7 @@
   "preferredDeviceMac": {"type": "string", "value": ""},
   "preferredDeviceName": {"type": "string", "value": ""},
   "outputEnabled": {"type": "boolean", "value": false},
+  "codecPreferences": {"type": "string", "value": "{}"},
   "volumeMode": {"type": "string", "value": "software"},
   "debugLogging": {"type": "boolean", "value": false}
 }

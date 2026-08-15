@@ -14,7 +14,7 @@ The current version has been tested on:
 - manual switching between the JBL speaker and an iFi USB DAC;
 - reconnect, plugin-only reset, reinstall and uninstall workflows.
 
-Other Volumio 4 devices, Bluetooth speakers and audio configurations remain untested. The plugin deliberately does not install or replace the system audio stack.
+Other Volumio 4 devices, Bluetooth speakers and audio configurations remain untested. The plugin deliberately does not install or replace the system audio stack. LDAC support is currently undergoing real-device testing with Soundcore P31i earbuds.
 
 ## What works
 
@@ -28,8 +28,10 @@ Other Volumio 4 devices, Bluetooth speakers and audio configurations remain unte
 - a plugin-only setup reset that preserves system Bluetooth pairings;
 - conservative uninstall behavior that preserves pairings, packages and MPD configuration.
 - runtime resolution of a paired speaker's owning Bluetooth controller, including systems where `hci0` and `hci1` change across reboots.
+- automatic or explicit per-device codec selection for speakers, headphones and earbuds, using codecs shared by BlueALSA and the connected device;
+- guarded LDAC enablement when the installed BlueALSA build already contains an LDAC encoder.
 
-The plugin does **not** install BlueALSA, PulseAudio or PipeWire and does **not** edit `/etc/mpd.conf` directly.
+The plugin does **not** install or replace BlueALSA, PulseAudio or PipeWire and does **not** edit `/etc/mpd.conf` directly. On a compatible BlueALSA installation it adds one plugin-owned systemd drop-in that enables the already-installed LDAC codec. The existing service command and profiles are preserved, the result is verified, and a failed change is rolled back.
 
 ## Important limitations
 
@@ -40,6 +42,7 @@ The plugin does **not** install BlueALSA, PulseAudio or PipeWire and does **not*
 - Pairing that requires a PIN or confirmation agent may need to be completed with `bluetoothctl` over SSH.
 - On systems with multiple Bluetooth controllers, reconnect, disconnect, trust and forget operations target the BlueZ device object that owns the pairing. Controller indexes such as `hci0` are deliberately not saved because Linux may renumber them after reboot. User-initiated discovery still follows the controller selected by BlueZ, so advanced first-time pairing arrangements may require selecting the intended controller in `bluetoothctl`.
 - With Volumio **Mixer Type** set to **Hardware**, Bluetooth is effectively sent at 100%; Volumio's volume control continues to apply to the physical DAC instead. Use **Software** mixer mode if you want Volumio to control Bluetooth playback volume.
+- Codec support depends on both the connected device and the BlueALSA build supplied by the system. The tested Volumio 4 build contains LDAC but was not compiled with AAC, so this plugin cannot offer AAC without replacing system audio packages. It intentionally does not do that.
 
 ## Install from the forum preview branch
 
@@ -55,6 +58,8 @@ volumio plugin install
 ```
 
 Confirm the warning for manually installed, unverified plugins. After installation, open **Plugins**, enable **Wireless Output Manager**, then open its settings page.
+
+During installation, a compatible BlueALSA service is restarted once to enable its existing LDAC encoder. Bluetooth devices may disconnect briefly and can then be reconnected normally. SBC remains available. If LDAC cannot be verified, the installer restores the previous service configuration and the plugin continues with the codecs already provided by the system.
 
 The `/tmp/wireless-output-manager-src` checkout may disappear after a reboot. That does not remove the installed plugin. Clone it again if you later need a fresh source checkout.
 
@@ -105,6 +110,16 @@ To return to the output already selected in Volumio Playback Options, choose **P
 - **Reconnect automatically** reconnects the saved speaker when it becomes available. It never changes the selected audio destination and does not provide automatic fallback when the speaker becomes unavailable.
 - **Reset speaker setup** returns to the default output and clears only this plugin's saved speaker and routing state. It preserves system-wide Bluetooth pairings so other Bluetooth plugins are not disrupted.
 
+## Bluetooth audio codecs
+
+The codec preference is saved separately for each Bluetooth audio device, including speakers, headphones and earbuds. Connect the device, then open **Preferences → Bluetooth audio codec**:
+
+- **Automatic — best available** chooses LDAC first, then AAC, then SBC from the codecs mutually reported for that connection;
+- choosing **LDAC**, **AAC** or **SBC** explicitly requires that codec and fails clearly rather than silently falling back;
+- the selected codec is applied and verified when you choose **Play on Bluetooth speaker**.
+
+Only codecs reported by the current connection are offered in the selector. Some headphones require their high-quality codec mode to be enabled in the manufacturer's app before they advertise LDAC. LDAC can consume more battery and may be less stable in a congested 2.4 GHz environment; select SBC if reliability is more important than bitrate.
+
 To use a different speaker, repeat the search, selection and **Use selected speaker** workflow. The plugin returns active Bluetooth routing to the default output, disconnects every other connected device that BlueZ confirms is an audio speaker, and connects the newly selected speaker. All pairings are preserved, and confirmed non-audio Bluetooth devices are not touched. The existing saved speaker is replaced only after the new speaker connects successfully. Choose **Play on Bluetooth speaker** afterward when you are ready to route music to it.
 
 Before changing a working connection, the plugin first confirms that the newly selected device can connect. If it is switched off or unavailable, the current speaker, saved selection and audio route are left unchanged and the UI asks you to turn on the selected device and try again.
@@ -139,6 +154,9 @@ For an existing BlueALSA installation:
 ```bash
 systemctl status bluealsa --no-pager
 bluealsa-aplay -L
+bluealsa-cli status
+bluealsa-cli list-pcms
+bluealsa-cli info <PCM-PATH>
 ```
 
 Common messages:
@@ -152,11 +170,12 @@ Common messages:
 
 First choose **Play on default audio output**, then remove the plugin through Volumio's Plugins page.
 
-Uninstall removes only the plugin-owned ALSA contribution. It preserves:
+Uninstall removes the plugin-owned ALSA contribution and its plugin-owned BlueALSA codec drop-in, then reloads the original BlueALSA service command. It preserves:
 
 - system Bluetooth pairings;
 - BlueZ and audio-stack packages;
 - `/etc/mpd.conf`;
+- every unrelated systemd service setting;
 - exported diagnostics under `/data/INTERNAL`.
 
 ## Reporting a test result

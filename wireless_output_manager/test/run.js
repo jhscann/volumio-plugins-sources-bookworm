@@ -2,6 +2,7 @@
 
 var assert = require('assert');
 var BluetoothAdapter = require('../lib/adapters/bluetooth');
+var CodecManager = require('../lib/codecManager');
 var CommandRunner = require('../lib/commandRunner').CommandRunner;
 var WirelessOutputManager = require('../index');
 
@@ -24,6 +25,57 @@ async function main() {
     { id: 'AA:BB:CC:DD:EE:FF', name: 'Living Room' }
   ]);
   assert.throws(function () { adapter._mac('not-a-mac'); }, /valid Bluetooth device/);
+
+  var codecCommands = [];
+  var codecSelected = 'SBC';
+  var codecPcm = '/org/bluealsa/hci1/dev_34_0E_22_54_16_73/a2dpsrc/sink';
+  var codecManager = new CodecManager({
+    runner: { run: async function (command, args) {
+      codecCommands.push({ command: command, args: args });
+      if (args[0] === 'status') return { stdout: 'Profiles:\n  A2DP-source : SBC AAC LDAC\n', exitCode: 0 };
+      if (args[0] === 'list-pcms') return { stdout: codecPcm + '\n', exitCode: 0 };
+      if (args[0] === 'info') return {
+        stdout: 'Available codecs: SBC AAC LDAC\nSelected codec: ' + codecSelected + '\n', exitCode: 0
+      };
+      if (args[0] === 'codec') {
+        codecSelected = args[2];
+        return { stdout: '', exitCode: 0 };
+      }
+      throw new Error('Unexpected codec command');
+    } },
+    logger: { info: function () {} }
+  });
+  var codecStatus = await codecManager.getStatus('34:0E:22:54:16:73');
+  assert.strictEqual(codecStatus.pcmPath, codecPcm, 'codec lookup must resolve the current hci path by MAC');
+  assert.deepStrictEqual(codecStatus.systemCodecs, ['SBC', 'AAC', 'LDAC']);
+  assert.deepStrictEqual(codecStatus.availableCodecs, ['SBC', 'AAC', 'LDAC']);
+  assert.strictEqual(codecStatus.activeCodec, 'SBC');
+  await codecManager.select('34:0E:22:54:16:73', 'ldac');
+  assert.strictEqual(codecSelected, 'LDAC', 'explicit codec selection must be verified after applying it');
+  assert(codecCommands.some(function (call) {
+    return call.args[0] === 'codec' && call.args[1] === codecPcm && call.args[2] === 'LDAC';
+  }), 'codec command must target the resolved speaker PCM');
+
+  codecSelected = 'SBC';
+  codecCommands = [];
+  await codecManager.select('34:0E:22:54:16:73', 'auto');
+  assert.strictEqual(codecSelected, 'LDAC', 'automatic codec mode must choose the best mutually available codec');
+  assert(codecCommands.some(function (call) {
+    return call.args[0] === 'codec' && call.args[2] === 'LDAC';
+  }), 'automatic codec mode must explicitly select and verify LDAC when available');
+
+  var unavailableCodecManager = new CodecManager({
+    runner: { run: async function (command, args) {
+      if (args[0] === 'status') return { stdout: 'Profiles:\n  A2DP-source : SBC LDAC\n', exitCode: 0 };
+      if (args[0] === 'list-pcms') return { stdout: codecPcm + '\n', exitCode: 0 };
+      if (args[0] === 'info') return { stdout: 'Available codecs: SBC LDAC\nSelected codec: SBC\n', exitCode: 0 };
+      throw new Error('AAC selection must fail before a codec command is issued');
+    } },
+    logger: { info: function () {} }
+  });
+  await assert.rejects(unavailableCodecManager.select('34:0E:22:54:16:73', 'AAC'),
+    /AAC is not enabled by the installed BlueALSA service/,
+    'missing AAC builds must produce a clear capability error');
   adapter._bus = async function () {
     return { stdout: '└─/org/bluez\n  ├─/org/bluez/hci0\n  │ └─/org/bluez/hci0/dev_A0_4A_5E_D9_98_F5\n  └─/org/bluez/hci1/dev_C4_30_18_EA_9D_EC', exitCode: 0 };
   };
@@ -136,7 +188,13 @@ async function main() {
   assert.strictEqual(failedConnects, 2, 'connection lock must clear after failure so a later bounded retry can run');
 
   var optionPlugin = new WirelessOutputManager({ coreCommand: {}, logger: {}, configManager: {} });
-  optionPlugin.config = { get: function () { return 'Living Room'; } };
+  optionPlugin.log = { warn: function () {} };
+  optionPlugin.codecManager = codecManager;
+  var optionConfig = { preferredDeviceName: 'Living Room', codecPreferences: '{}' };
+  optionPlugin.config = {
+    get: function (key) { return optionConfig[key]; },
+    set: function (key, value) { optionConfig[key] = value; }
+  };
   optionPlugin.devices = [
     { id: 'AA:BB:CC:DD:EE:04', name: 'Keyboard', connected: true, paired: true, audioCapable: false },
     { id: 'AA:BB:CC:DD:EE:03', name: '', connected: false, paired: false, audioCapable: null },
@@ -149,6 +207,16 @@ async function main() {
   ], 'speaker options must prioritize selected and connected audio devices, retain unidentified devices and hide known non-audio devices');
   assert.strictEqual(optionPlugin._speakerOptionLabel(speakerOptions[0], 'AA:BB:CC:DD:EE:01'), 'Living Room — selected, paired, audio');
   assert.strictEqual(optionPlugin._speakerOptionLabel(speakerOptions[2], 'AA:BB:CC:DD:EE:01'), 'AA:BB:CC:DD:EE:03 — unidentified device');
+  optionPlugin._setPreferredCodecFor('AA:BB:CC:DD:EE:01', 'LDAC');
+  optionPlugin._setPreferredCodecFor('AA:BB:CC:DD:EE:02', 'SBC');
+  assert.strictEqual(optionPlugin._preferredCodecFor('AA:BB:CC:DD:EE:01'), 'LDAC',
+    'codec preference must be saved independently for the first audio device');
+  assert.strictEqual(optionPlugin._preferredCodecFor('AA:BB:CC:DD:EE:02'), 'SBC',
+    'codec preference must be saved independently for the second audio device');
+  optionPlugin._removeCodecPreferenceFor('AA:BB:CC:DD:EE:01');
+  assert.strictEqual(optionPlugin._preferredCodecFor('AA:BB:CC:DD:EE:01'), 'AUTO',
+    'forgetting a device must remove only its saved codec preference');
+  assert.strictEqual(optionPlugin._preferredCodecFor('AA:BB:CC:DD:EE:02'), 'SBC');
 
   var runner = new CommandRunner({ defaultTimeoutMs: 1000 });
   var ok = await runner.run(process.execPath, ['-e', 'process.stdout.write("ok")']);
@@ -346,7 +414,8 @@ async function main() {
     preferredDeviceName: 'JBL PartyBox 100',
     outputEnabled: false,
     autoReconnect: true,
-    debugLogging: false
+    debugLogging: false,
+    codecPreferences: '{"C4:30:18:EA:9D:EC":"AUTO"}'
   };
   plugin.commandRouter = {
     sharedVars: { get: function () { return 'en'; } },
@@ -357,6 +426,12 @@ async function main() {
     pushUIConfigParam: function () {}
   };
   plugin.config = { get: function (key) { return uiValues[key]; } };
+  plugin.codecManager = {
+    normalize: function (value) { return value || 'AUTO'; },
+    getStatus: async function () {
+      return { available: true, systemCodecs: ['SBC', 'LDAC'], availableCodecs: ['SBC', 'LDAC'], activeCodec: 'SBC' };
+    }
+  };
   plugin.bluetooth = { getStatus: async function () { return { preferred: { paired: true, connected: true } }; } };
   plugin.devices = [];
   await plugin.getUIConfig();

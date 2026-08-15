@@ -5,6 +5,7 @@ var fs = require('fs-extra');
 var path = require('path');
 var CommandRunner = require('./lib/commandRunner').CommandRunner;
 var BluetoothAdapter = require('./lib/adapters/bluetooth');
+var CodecManager = require('./lib/codecManager');
 var Diagnostics = require('./lib/diagnostics');
 var OutputManager = require('./lib/outputManager');
 var createLogger = require('./lib/logger');
@@ -32,6 +33,7 @@ WirelessOutputManager.prototype.onVolumioStart = function () {
   this.diagLog = createLogger(this.logger, 'Diagnostics', this._debugEnabled.bind(this));
   this.runner = new CommandRunner({ logger: this.log, defaultTimeoutMs: 15000 });
   this.bluetooth = new BluetoothAdapter({ runner: this.runner, logger: this.btLog });
+  this.codecManager = new CodecManager({ runner: this.runner, logger: this.btLog });
   this.diagnostics = new Diagnostics({ runner: this.runner, logger: this.diagLog });
   this.outputManager = new OutputManager({
     pluginDir: __dirname, runner: this.runner, logger: this.log, commandRouter: this.commandRouter
@@ -69,6 +71,38 @@ WirelessOutputManager.prototype.onInstall = function () { return libQ.resolve();
 WirelessOutputManager.prototype.onUninstall = function () { return libQ.resolve(); };
 WirelessOutputManager.prototype.getConfigurationFiles = function () { return ['config.json']; };
 WirelessOutputManager.prototype._debugEnabled = function () { return Boolean(this.config && this.config.get('debugLogging')); };
+
+WirelessOutputManager.prototype._codecPreferences = function () {
+  try {
+    var parsed = JSON.parse(this.config.get('codecPreferences') || '{}');
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch (error) {
+    this.log.warn('Ignoring invalid saved codec preferences: ' + error.message);
+    return {};
+  }
+};
+
+WirelessOutputManager.prototype._preferredCodecFor = function (deviceId) {
+  var mac = String(deviceId || '').toUpperCase();
+  return this.codecManager.normalize(this._codecPreferences()[mac] || 'AUTO');
+};
+
+WirelessOutputManager.prototype._setPreferredCodecFor = function (deviceId, codec) {
+  var mac = String(deviceId || '').toUpperCase();
+  if (!BluetoothAdapter.MAC_RE.test(mac)) throw new Error('Choose a speaker before saving its codec preference');
+  var preferences = this._codecPreferences();
+  preferences[mac] = this.codecManager.normalize(codec);
+  this.config.set('codecPreferences', JSON.stringify(preferences));
+};
+
+WirelessOutputManager.prototype._removeCodecPreferenceFor = function (deviceId) {
+  var mac = String(deviceId || '').toUpperCase();
+  var preferences = this._codecPreferences();
+  if (Object.prototype.hasOwnProperty.call(preferences, mac)) {
+    delete preferences[mac];
+    this.config.set('codecPreferences', JSON.stringify(preferences));
+  }
+};
 
 WirelessOutputManager.prototype._clearReconnect = function () {
   if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
@@ -209,6 +243,7 @@ WirelessOutputManager.prototype.getUIConfig = function () {
     set('sections[3].content[0]', 'value', Boolean(self.config.get('autoReconnect')));
     set('sections[3].content[1]', 'value', Boolean(self.config.get('debugLogging')));
     var preferred = self.config.get('preferredDeviceMac') || '';
+    var preferredCodec = self._preferredCodecFor(preferred);
     var preferredName = self.config.get('preferredDeviceName') || 'No speaker selected';
     if (!self.devices.length) await self._loadKnownDevices().catch(function () {});
     var status = await self.bluetooth.getStatus(preferred).catch(function (error) { return { available: false, lastError: error.message }; });
@@ -229,6 +264,24 @@ WirelessOutputManager.prototype.getUIConfig = function () {
     var outputEnabled = Boolean(self.config.get('outputEnabled'));
     var connectedAudio = options.filter(function (device) { return device.audioCapable === true && device.connected; });
     var connectedNames = connectedAudio.map(function (device) { return device.name || device.id; });
+    var codecStatus = preferred ? await self.codecManager.getStatus(preferred).catch(function (error) {
+      return { available: false, systemCodecs: [], availableCodecs: [], activeCodec: '', error: error.message };
+    }) : { available: false, systemCodecs: [], availableCodecs: [], activeCodec: '' };
+    var visibleCodecs = connected ? codecStatus.availableCodecs : codecStatus.systemCodecs;
+    var codecOptions = [{ value: 'AUTO', label: 'Automatic — best available' }];
+    ['LDAC', 'AAC', 'SBC'].forEach(function (codec) {
+      if (visibleCodecs.indexOf(codec) !== -1 || preferredCodec === codec) {
+        codecOptions.push({
+          value: codec,
+          label: codec === 'LDAC' ? 'LDAC — highest available quality' :
+            (codec === 'SBC' ? 'SBC — maximum compatibility' : 'AAC')
+        });
+      }
+    });
+    var selectedCodecOption = codecOptions.find(function (option) { return option.value === preferredCodec; });
+    set('sections[3].content[2]', 'options', codecOptions);
+    set('sections[3].content[2]', 'value', selectedCodecOption || codecOptions[0]);
+    set('sections[3].content[2]', 'hidden', !preferred);
     if (connectedAudio.length > 1) set('sections[0]', 'description', 'Selected: ' + preferredName + '. Also connected: ' + connectedNames.filter(function (name) { return name !== preferredName; }).join(', ') + '. Choose one speaker and select Use selected speaker. Other audio speakers will disconnect but remain paired; music will move to the default output until you choose Play on Bluetooth speaker.');
     else if (connected) set('sections[0]', 'description', preferredName + ' is selected and connected. To change speakers: search, choose another speaker, then select Use selected speaker. The current speaker will disconnect but remain paired. Next, choose Play on Bluetooth speaker.');
     else if (paired) set('sections[0]', 'description', preferredName + ' is saved but disconnected. Use Reconnect speaker below, or search to choose another speaker.');
@@ -254,6 +307,16 @@ WirelessOutputManager.prototype.getUIConfig = function () {
     });
     set('sections[2].content[2]', 'hidden', pairedAudio.length === 0);
     set('sections[2].content[3]', 'hidden', !preferred);
+    var codecDescription;
+    if (!preferred) codecDescription = 'Choose a speaker before selecting a Bluetooth audio codec.';
+    else if (!connected) codecDescription = 'Saved for ' + preferredName + ': ' + preferredCodec + '. Connect the Bluetooth audio device to see the codecs it shares with Volumio.';
+    else {
+      codecDescription = 'Saved for ' + preferredName + ': ' + preferredCodec + '. Active: ' + (codecStatus.activeCodec || 'unknown') +
+        '. Available: ' + (codecStatus.availableCodecs.join(', ') || 'none reported') +
+        '. Automatic chooses LDAC, then AAC, then SBC. The choice is applied when you select Play on Bluetooth speaker.';
+      if (codecStatus.systemCodecs.indexOf('AAC') === -1) codecDescription += ' AAC is not available in the installed BlueALSA build.';
+    }
+    set('sections[3].content[2]', 'description', codecDescription);
     set('sections[4].content[3]', 'value', self.lastDiagnostics ? JSON.stringify(self.lastDiagnostics, null, 2) : 'Run diagnostics to collect system state.');
     set('sections[4].content[4]', 'value', self.lastError || 'None');
     set('sections[4].content[3]', 'hidden', !self.lastDiagnostics);
@@ -267,6 +330,12 @@ WirelessOutputManager.prototype.saveSettings = function (data) {
   ['autoReconnect', 'debugLogging'].forEach(function (key) {
     if (data[key] !== undefined) self.config.set(key, Boolean(data[key]));
   });
+  if (data.preferredCodec !== undefined) {
+    var submittedCodec = data.preferredCodec;
+    if (Array.isArray(submittedCodec)) submittedCodec = submittedCodec[0];
+    if (submittedCodec && typeof submittedCodec === 'object') submittedCodec = submittedCodec.value;
+    self._setPreferredCodecFor(self.config.get('preferredDeviceMac'), submittedCodec);
+  }
   self.config.set('activeBackend', 'bluetooth');
   if (self.config.get('enabled') && self.config.get('autoReconnect')) self._scheduleReconnect(1000);
   else self._clearReconnect();
@@ -447,6 +516,7 @@ WirelessOutputManager.prototype.forgetDevice = function (data) {
       self.config.set('enabled', false);
       self.config.set('outputEnabled', false);
     }
+    self._removeCodecPreferenceFor(id);
     self.devices = self.devices.filter(function (device) { return device.id !== id; });
     await self.refreshUI();
     return result;
@@ -462,6 +532,7 @@ WirelessOutputManager.prototype.resetSpeakerSetup = function () {
     self.config.set('preferredDeviceName', '');
     self.config.set('enabled', false);
     self.config.set('outputEnabled', false);
+    self.config.set('codecPreferences', '{}');
     self.devices = [];
     await self.refreshUI();
   }, 'Speaker setup reset; system Bluetooth pairings were preserved');
@@ -471,6 +542,11 @@ WirelessOutputManager.prototype.createBluetoothOutput = function () {
   var self = this;
   return self._action('Creating guarded BlueALSA output', function () {
     return self._stopPlaybackForRouting().then(function () {
+      return self.codecManager.select(
+        self.config.get('preferredDeviceMac'),
+        self._preferredCodecFor(self.config.get('preferredDeviceMac'))
+      );
+    }).then(function () {
       return self.outputManager.createOutput(self.config.get('preferredDeviceMac'));
     }).then(function (result) {
       self.config.set('outputEnabled', true);
@@ -495,6 +571,10 @@ WirelessOutputManager.prototype.runDiagnostics = function () {
   return self.diagnostics.all().then(async function (result) {
     result.wirelessOutput = await self.outputManager.getStatus();
     result.preferredDevice = await self.bluetooth.getStatus(self.config.get('preferredDeviceMac'));
+    result.bluetoothCodec = await self.codecManager.getStatus(self.config.get('preferredDeviceMac')).catch(function (error) {
+      return { available: false, error: error.message };
+    });
+    result.bluetoothCodec.preference = self._preferredCodecFor(self.config.get('preferredDeviceMac'));
     self.lastDiagnostics = result;
     await self.refreshUI();
     self._toast('success', 'Diagnostics complete');
