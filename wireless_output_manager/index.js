@@ -8,6 +8,7 @@ var BluetoothAdapter = require('./lib/adapters/bluetooth');
 var CodecManager = require('./lib/codecManager');
 var Diagnostics = require('./lib/diagnostics');
 var OutputManager = require('./lib/outputManager');
+var VolumioApi = require('./lib/volumioApi');
 var createLogger = require('./lib/logger');
 
 module.exports = WirelessOutputManager;
@@ -37,6 +38,7 @@ WirelessOutputManager.prototype.onVolumioStart = function () {
   this.runner = new CommandRunner({ logger: this.log, defaultTimeoutMs: 15000 });
   this.bluetooth = new BluetoothAdapter({ runner: this.runner, logger: this.btLog });
   this.codecManager = new CodecManager({ runner: this.runner, logger: this.btLog });
+  this.volumioApi = new VolumioApi();
   this.diagnostics = new Diagnostics({ runner: this.runner, logger: this.diagLog });
   this.outputManager = new OutputManager({
     pluginDir: __dirname, runner: this.runner, logger: this.log, commandRouter: this.commandRouter
@@ -123,51 +125,56 @@ WirelessOutputManager.prototype._stopPlaybackForRouting = function () {
   return new Promise(function (resolve) { setTimeout(resolve, 1000); });
 };
 
-WirelessOutputManager.prototype._captureSoftwareVolume = async function () {
-  var result = await this.runner.run('mpc', ['volume'], { timeoutMs: 5000, allowFailure: true });
-  if (result.exitCode !== 0) {
+WirelessOutputManager.prototype._captureVolumeState = async function () {
+  var state;
+  try {
+    state = await this.volumioApi.getState();
+  } catch (error) {
     throw new Error('Unable to verify Volumio volume before changing audio routing; no routing change was made.');
   }
-  var match = String(result.stdout || '').match(/volume:\s*(\d+)%/i);
-  if (!match) {
-    if (/volume:\s*n\/a/i.test(String(result.stdout || ''))) return null; // Hardware mixer needs no restoration.
-    throw new Error('Volumio returned an unrecognized volume state; no routing change was made.');
-  }
-  var volume = Number(match[1]);
-  if (volume < 0 || volume > 100) {
+  if (state.disableVolumeControl === true || state.volume === null || state.volume === undefined) return null;
+  var volume = Number(state.volume);
+  if (!Number.isFinite(volume) || volume < 0 || volume > 100) {
     throw new Error('Volumio returned an unsafe volume value; no routing change was made.');
   }
-  return volume;
+  return { volume: volume, mute: Boolean(state.mute) };
 };
 
-WirelessOutputManager.prototype._restoreSoftwareVolume = async function (volume) {
-  if (volume === null || volume === undefined) return;
-  var setResult = await this.runner.run('mpc', ['volume', String(volume)], { timeoutMs: 5000, allowFailure: true });
-  if (setResult.exitCode !== 0) {
-    throw new Error('Volumio software volume could not be restored; playback remains stopped. Set the volume manually before pressing Play.');
+WirelessOutputManager.prototype._restoreVolumeState = async function (saved) {
+  var self = this;
+  if (!saved) return;
+  try {
+    await self.volumioApi.setVolume(saved.volume);
+    if (saved.mute) await self.volumioApi.setVolume('mute');
+    else await self.volumioApi.setVolume('unmute');
+  } catch (error) {
+    throw new Error('Volumio volume could not be restored; playback remains stopped. Set the volume manually before pressing Play.');
   }
-  var verify = await this.runner.run('mpc', ['volume'], { timeoutMs: 5000, allowFailure: true });
-  var match = verify.exitCode === 0 && String(verify.stdout || '').match(/volume:\s*(\d+)%/i);
-  if (!match || Number(match[1]) !== volume) {
-    throw new Error('Volumio software volume could not be verified after routing changed; playback remains stopped. Set the volume manually before pressing Play.');
+  for (var attempt = 0; attempt < 10; attempt += 1) {
+    var state = await self.volumioApi.getState().catch(function () { return null; });
+    if (state && Number(state.volume) === saved.volume && Boolean(state.mute) === saved.mute) {
+      self.log.info('Restored Volumio volume to ' + saved.volume + '%' + (saved.mute ? ' (muted)' : '') + ' after changing audio routing');
+      return;
+    }
+    if (attempt < 9) await new Promise(function (resolve) { setTimeout(resolve, 250); });
   }
-  this.log.info('Restored Volumio software volume to ' + volume + '% after changing audio routing');
+  throw new Error('Volumio volume could not be verified after routing changed; playback remains stopped. Set the volume manually before pressing Play.');
 };
 
 WirelessOutputManager.prototype._withPreservedSoftwareVolume = async function (operation) {
-  var volume = await this._captureSoftwareVolume();
+  var volumeState = await this._captureVolumeState();
   var result;
   try {
     result = await operation();
   } catch (operationError) {
     try {
-      await this._restoreSoftwareVolume(volume);
+      await this._restoreVolumeState(volumeState);
     } catch (volumeError) {
       throw new Error(operationError.message + ' Volume restoration also failed: ' + volumeError.message);
     }
     throw operationError;
   }
-  await this._restoreSoftwareVolume(volume);
+  await this._restoreVolumeState(volumeState);
   return result;
 };
 
@@ -412,7 +419,7 @@ WirelessOutputManager.prototype.getUIConfig = function () {
     else {
       codecDescription = 'Saved for ' + preferredName + ': ' + preferredCodecName + '. Active: ' + (codecStatus.activeCodec ? self.codecManager.displayName(codecStatus.activeCodec) : 'unknown') +
         '. Available: ' + (codecStatus.availableCodecs.map(function (codec) { return self.codecManager.displayName(codec); }).join(', ') || 'none reported') +
-        '. Automatic chooses LDAC, aptX HD, AAC, aptX, then SBC. The choice is applied when you select Play on Bluetooth speaker. Software mixer volume is preserved while routing changes.';
+        '. Automatic chooses LDAC, aptX HD, AAC, aptX, then SBC. The choice is applied when you select Play on Bluetooth speaker. Volumio volume and mute state are preserved while routing changes.';
       if (codecStatus.systemCodecs.indexOf('AAC') === -1) codecDescription += ' AAC is not available in the installed BlueALSA build.';
     }
     set('sections[3].content[2]', 'description', codecDescription);

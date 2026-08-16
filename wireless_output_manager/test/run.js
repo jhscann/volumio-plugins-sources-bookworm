@@ -4,6 +4,7 @@ var assert = require('assert');
 var BluetoothAdapter = require('../lib/adapters/bluetooth');
 var CodecManager = require('../lib/codecManager');
 var CommandRunner = require('../lib/commandRunner').CommandRunner;
+var VolumioApi = require('../lib/volumioApi');
 var WirelessOutputManager = require('../index');
 
 async function main() {
@@ -270,48 +271,94 @@ async function main() {
   assert.strictEqual(stopCalls, 1, 'manual route switch must stop playback');
   assert(Date.now() - started >= 900, 'manual route switch must allow MPD to release the PCM');
 
+  var apiPaths = [];
+  var api = new VolumioApi({ request: async function (requestPath) {
+    apiPaths.push(requestPath);
+    return requestPath === '/api/v1/getState' ? '{"volume":27,"mute":false}' : '';
+  } });
+  assert.strictEqual((await api.getState()).volume, 27, 'Volumio API client must parse the player state');
+  await api.setVolume(31);
+  await api.setVolume('mute');
+  assert.deepStrictEqual(apiPaths, [
+    '/api/v1/getState',
+    '/api/v1/commands/?cmd=volume&volume=31',
+    '/api/v1/commands/?cmd=volume&volume=mute'
+  ], 'Volumio API client must use the documented state and volume endpoints');
+  var invalidApi = new VolumioApi({ request: async function () { return 'not-json'; } });
+  await assert.rejects(invalidApi.getState(), /invalid player state/,
+    'invalid Volumio player state must be rejected');
+
   var softwareVolume = 27;
+  var softwareMuted = false;
   var volumeSetCalls = [];
   var volumePlugin = new WirelessOutputManager({ coreCommand: {}, logger: {}, configManager: {} });
   volumePlugin.log = { info: function () {}, warn: function () {} };
-  volumePlugin.runner = { run: async function (command, args) {
-    assert.strictEqual(command, 'mpc');
-    if (args.length === 1) return { stdout: 'volume: ' + softwareVolume + '%   repeat: off\n', stderr: '', exitCode: 0 };
-    volumeSetCalls.push(args[1]);
-    softwareVolume = Number(args[1]);
-    return { stdout: 'volume: ' + softwareVolume + '%\n', stderr: '', exitCode: 0 };
-  } };
+  volumePlugin.volumioApi = {
+    getState: async function () {
+      return { volume: softwareVolume, mute: softwareMuted, disableVolumeControl: false };
+    },
+    setVolume: async function (value) {
+      volumeSetCalls.push(value);
+      if (value === 'mute') softwareMuted = true;
+      else if (value === 'unmute') softwareMuted = false;
+      else softwareVolume = Number(value);
+    }
+  };
   await volumePlugin._withPreservedSoftwareVolume(async function () {
-    softwareVolume = 100; // Simulate MPD resetting its software mixer during the ALSA rebuild.
+    softwareVolume = 100; // Simulate Volumio resetting its volume during the ALSA rebuild.
   });
-  assert.strictEqual(softwareVolume, 27, 'manual routing must restore the previous software volume');
-  assert.deepStrictEqual(volumeSetCalls, ['27'], 'software volume must be restored exactly once');
+  assert.strictEqual(softwareVolume, 27, 'manual routing must restore the previous Volumio volume');
+  assert.strictEqual(softwareMuted, false, 'manual routing must preserve an unmuted state');
+  assert.deepStrictEqual(volumeSetCalls, [27, 'unmute'], 'volume and mute state must both be restored');
+
+  softwareVolume = 18;
+  softwareMuted = true;
+  volumeSetCalls = [];
+  await volumePlugin._withPreservedSoftwareVolume(async function () {
+    softwareVolume = 100;
+    softwareMuted = false;
+  });
+  assert.strictEqual(softwareVolume, 18, 'manual routing must restore volume while muted');
+  assert.strictEqual(softwareMuted, true, 'manual routing must restore a muted state');
+  assert.deepStrictEqual(volumeSetCalls, [18, 'mute'], 'muted state must be restored after numeric volume');
 
   var hardwareSetCalls = 0;
-  volumePlugin.runner = { run: async function (command, args) {
-    if (args.length === 1) return { stdout: 'volume: n/a\n', stderr: '', exitCode: 0 };
-    hardwareSetCalls += 1;
-    return { stdout: '', stderr: '', exitCode: 0 };
-  } };
+  volumePlugin.volumioApi = {
+    getState: async function () { return { volume: 100, mute: false, disableVolumeControl: true }; },
+    setVolume: async function () { hardwareSetCalls += 1; }
+  };
   await volumePlugin._withPreservedSoftwareVolume(async function () {});
-  assert.strictEqual(hardwareSetCalls, 0, 'hardware mixer mode must not trigger a software-volume write');
+  assert.strictEqual(hardwareSetCalls, 0, 'disabled volume control must not trigger a volume write');
 
   var unsafeOperationRan = false;
-  volumePlugin.runner = { run: async function () {
-    return { stdout: '', stderr: 'MPD unavailable', exitCode: 1 };
-  } };
+  volumePlugin.volumioApi = {
+    getState: async function () { throw new Error('Volumio API unavailable'); },
+    setVolume: async function () {}
+  };
   await assert.rejects(volumePlugin._withPreservedSoftwareVolume(async function () { unsafeOperationRan = true; }),
     /no routing change was made/,
     'routing must not start when the current volume cannot be determined');
   assert.strictEqual(unsafeOperationRan, false, 'an unreadable volume must stop the routing operation before it starts');
 
-  volumePlugin.runner = { run: async function (command, args) {
-    if (args.length === 1) return { stdout: 'volume: 32%\n', stderr: '', exitCode: 0 };
-    return { stdout: '', stderr: 'setvol failed', exitCode: 1 };
-  } };
+  volumePlugin.volumioApi = {
+    getState: async function () { return { volume: 32, mute: false, disableVolumeControl: false }; },
+    setVolume: async function () { throw new Error('set volume failed'); }
+  };
   await assert.rejects(volumePlugin._withPreservedSoftwareVolume(async function () {}),
     /playback remains stopped/,
-    'a failed software-volume restoration must produce a clear safety error');
+    'a failed Volumio-volume restoration must produce a clear safety error');
+
+  var verificationReads = 0;
+  volumePlugin.volumioApi = {
+    getState: async function () {
+      verificationReads += 1;
+      return { volume: verificationReads === 1 ? 32 : 100, mute: false, disableVolumeControl: false };
+    },
+    setVolume: async function () {}
+  };
+  await assert.rejects(volumePlugin._withPreservedSoftwareVolume(async function () {}),
+    /could not be verified.*playback remains stopped/,
+    'a restoration that cannot be verified must keep playback stopped');
 
   var recoveryMac = '34:09:C9:B0:39:B6';
   var recoveryCalls = [];

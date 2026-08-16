@@ -36,7 +36,7 @@
   "AUTO_RECONNECT_SPEAKER": "Reconnect automatically",
   "AUTO_RECONNECT_NOTE": "Reconnects the saved speaker when it becomes available, but never changes the selected audio destination and does not provide automatic fallback.",
   "PREFERRED_CODEC": "Bluetooth audio codec",
-  "PREFERRED_CODEC_NOTE": "Saved separately for each Bluetooth audio device, including speakers, headphones and earbuds. Automatic chooses the best mutually available codec in this order: LDAC, aptX HD, AAC, aptX, then SBC. A manual choice is verified and never silently falls back. With Software mixer active, the current Volumio volume is preserved while routing changes.",
+  "PREFERRED_CODEC_NOTE": "Saved separately for each Bluetooth audio device, including speakers, headphones and earbuds. Automatic chooses the best mutually available codec in this order: LDAC, aptX HD, AAC, aptX, then SBC. A manual choice is verified and never silently falls back. Volumio volume and mute state are preserved while routing changes.",
   "DIAGNOSTICS_NOTE": "Troubleshooting tools and technical details.",
   "GENERAL": "General",
   "PLUGIN_ENABLED": "Plugin enabled",

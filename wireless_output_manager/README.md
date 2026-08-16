@@ -120,7 +120,7 @@ The codec preference is saved separately for each Bluetooth audio device, includ
 - **Automatic — best available** chooses LDAC first, then aptX HD, AAC, aptX and SBC from the codecs mutually reported for that connection;
 - choosing **LDAC**, **aptX HD**, **AAC**, **aptX** or **SBC** explicitly requires that codec and fails clearly rather than silently falling back;
 - the selected codec is applied and verified when you choose **Play on Bluetooth speaker**;
-- when Volumio's Software mixer is active, the plugin captures and restores its numeric volume around each manual routing change. If restoration cannot be verified, playback remains stopped and the plugin tells you to set a safe volume manually before pressing Play. Hardware mixer mode reports no software volume and is left untouched.
+- the plugin captures and restores Volumio's volume and mute state around each manual routing change. If Volumio has disabled volume control, no volume command is sent. If restoration cannot be verified, playback remains stopped and the plugin tells you to set a safe volume manually before pressing Play.
 
 Only codecs reported by the current connection are offered in the selector. Some headphones require their high-quality codec mode to be enabled in the manufacturer's app before they advertise LDAC. LDAC can consume more battery and may be less stable in a congested 2.4 GHz environment; select SBC if reliability is more important than bitrate. aptX Adaptive itself is not available, although an aptX Adaptive device may expose standard aptX or aptX HD as a backward-compatible connection.
 
