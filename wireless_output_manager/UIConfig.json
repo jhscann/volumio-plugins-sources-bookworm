@@ -23,7 +23,11 @@
       "hidden": false,
       "content": [
         {"id": "createOutput", "element": "button", "label": "TRANSLATE.PLAY_ON_WIRELESS", "hidden": false, "onClick": {"type": "plugin", "endpoint": "system_hardware/wireless_output_manager", "method": "createBluetoothOutput", "data": []}},
-        {"id": "removeOutput", "element": "button", "label": "TRANSLATE.PLAY_ON_DEFAULT", "onClick": {"type": "plugin", "endpoint": "system_hardware/wireless_output_manager", "method": "removeBluetoothOutput", "data": []}}
+        {"id": "removeOutput", "element": "button", "label": "TRANSLATE.PLAY_ON_DEFAULT", "onClick": {"type": "plugin", "endpoint": "system_hardware/wireless_output_manager", "method": "removeBluetoothOutput", "data": []}},
+        {"id": "bluetoothDeviceVolume", "element": "input", "type": "number", "label": "TRANSLATE.BLUETOOTH_DEVICE_VOLUME", "description": "TRANSLATE.BLUETOOTH_DEVICE_VOLUME_NOTE", "value": 10, "hidden": true, "attributes": [{"min": 0, "max": 100, "step": 1}]},
+        {"id": "setBluetoothDeviceVolume", "element": "button", "label": "TRANSLATE.APPLY_DEVICE_VOLUME", "hidden": true, "onClick": {"type": "plugin", "endpoint": "system_hardware/wireless_output_manager", "method": "setBluetoothDeviceVolume", "data": ["bluetoothDeviceVolume"]}},
+        {"id": "volumioSoftwareVolume", "element": "input", "type": "number", "label": "TRANSLATE.VOLUMIO_SOFTWARE_VOLUME", "description": "TRANSLATE.VOLUMIO_SOFTWARE_VOLUME_NOTE", "value": 10, "hidden": true, "attributes": [{"min": 0, "max": 100, "step": 1}]},
+        {"id": "setVolumioSoftwareVolume", "element": "button", "label": "TRANSLATE.APPLY_SOFTWARE_VOLUME", "hidden": true, "onClick": {"type": "plugin", "endpoint": "system_hardware/wireless_output_manager", "method": "setVolumioSoftwareVolume", "data": ["volumioSoftwareVolume"]}}
       ]
     },
     {

@@ -2,6 +2,7 @@
 
 var assert = require('assert');
 var BluetoothAdapter = require('../lib/adapters/bluetooth');
+var BluetoothVolumeManager = require('../lib/bluetoothVolumeManager');
 var CodecManager = require('../lib/codecManager');
 var CommandRunner = require('../lib/commandRunner').CommandRunner;
 var VolumioApi = require('../lib/volumioApi');
@@ -15,6 +16,10 @@ async function main() {
   assert(uiIds.indexOf('scanDevices') !== -1 && uiIds.indexOf('preferredDevice') !== -1, 'onboarding must expose discovery and speaker selection');
   assert(uiIds.indexOf('pairDevice') === -1 && uiIds.indexOf('trustDevice') === -1, 'low-level pairing controls must stay out of the main UI');
   assert(uiIds.indexOf('createOutput') !== -1 && uiIds.indexOf('removeOutput') !== -1, 'manual audio destination controls must remain available');
+  assert(uiIds.indexOf('bluetoothDeviceVolume') !== -1 && uiIds.indexOf('setBluetoothDeviceVolume') !== -1,
+    'connected-device hardware volume controls must be available in the routing section');
+  assert(uiIds.indexOf('volumioSoftwareVolume') !== -1 && uiIds.indexOf('setVolumioSoftwareVolume') !== -1,
+    'Volumio software-volume controls must be available alongside Bluetooth device volume');
   assert(uiIds.indexOf('pairedDeviceToForget') !== -1, 'paired-device selection must be available for pairing removal');
   assert(uiIds.indexOf('resetSpeakerSetup') !== -1, 'safe plugin-only reset must remain available');
 
@@ -26,6 +31,44 @@ async function main() {
     { id: 'AA:BB:CC:DD:EE:FF', name: 'Living Room' }
   ]);
   assert.throws(function () { adapter._mac('not-a-mac'); }, /valid Bluetooth device/);
+
+  var deviceVolume = 100;
+  var volumeCommands = [];
+  var bluetoothVolume = new BluetoothVolumeManager({
+    safeMaximumPercent: 10,
+    runner: { run: async function (command, args) {
+      volumeCommands.push({ command: command, args: args });
+      assert.strictEqual(command, 'amixer');
+      assert.strictEqual(args[1], 'bluealsa:DEV=34:DF:2A:4F:74:F5',
+        'the safety cap must target only the selected Bluetooth MAC');
+      if (args[2] === 'sset') {
+        assert.strictEqual(args[3], 'A2DP');
+        deviceVolume = Number(String(args[4]).replace('%', ''));
+        return { stdout: '', exitCode: 0 };
+      }
+      return {
+        stdout: "Simple mixer control 'A2DP',0\n" +
+          '  Front Left: Playback ' + Math.round(deviceVolume * 1.27) + ' [' + deviceVolume + '%] [on]\n' +
+          '  Front Right: Playback ' + Math.round(deviceVolume * 1.27) + ' [' + deviceVolume + '%] [on]\n',
+        exitCode: 0
+      };
+    } },
+    logger: { info: function () {}, warn: function () {} }
+  });
+  var cappedVolume = await bluetoothVolume.applySafetyCap('34:df:2a:4f:74:f5');
+  assert.strictEqual(cappedVolume.changed, true, 'an unsafe Bluetooth device volume must be lowered');
+  assert.strictEqual(cappedVolume.volume.maximum, 10, 'the selected device safety cap must be verified');
+  var setCount = volumeCommands.filter(function (call) { return call.args[2] === 'sset'; }).length;
+  await bluetoothVolume.applySafetyCap('34:DF:2A:4F:74:F5');
+  assert.strictEqual(volumeCommands.filter(function (call) { return call.args[2] === 'sset'; }).length, setCount,
+    'a device already at or below the safety cap must never be raised or rewritten');
+  var userVolume = await bluetoothVolume.setVolume('34:DF:2A:4F:74:F5', 35);
+  assert.strictEqual(userVolume.maximum, 35, 'an explicit user action must be able to raise connected-device volume');
+  await assert.rejects(bluetoothVolume.setVolume('34:DF:2A:4F:74:F5', 101), /between 0 and 100/);
+  await assert.rejects(bluetoothVolume.setVolume('34:DF:2A:4F:74:F5', ''), /between 0 and 100/);
+  assert.throws(function () { bluetoothVolume._device('not-a-mac'); }, /valid Bluetooth audio device/);
+  assert.throws(function () { bluetoothVolume._parsePlaybackPercentages('no playback control'); },
+    /did not report an A2DP playback volume/);
 
   var codecCommands = [];
   var codecSelected = 'SBC';
@@ -410,6 +453,78 @@ async function main() {
   await assert.rejects(volumePlugin._withPreservedSoftwareVolume(async function () { ignoreRestoration = true; }),
     /could not be verified.*playback remains stopped/,
     'a restoration that cannot be verified must keep playback stopped');
+
+  var failClosedPlugin = new WirelessOutputManager({ coreCommand: {}, logger: {}, configManager: {} });
+  var failClosedCalls = [];
+  failClosedPlugin._captureVolumeState = async function () { return { volume: 25, mute: false }; };
+  failClosedPlugin._forceSafeVolumeState = async function () { failClosedCalls.push('safe'); };
+  failClosedPlugin._restoreVolumeState = async function () { failClosedCalls.push('restore'); };
+  var failClosedError = new Error('device safety failed');
+  failClosedError.keepSafeVolume = true;
+  await assert.rejects(failClosedPlugin._withPreservedSoftwareVolume(async function () { throw failClosedError; }),
+    /device safety failed/);
+  assert.deepStrictEqual(failClosedCalls, ['safe', 'safe'],
+    'device-safety failures must remain in the safe state instead of restoring and unmuting');
+
+  var routeCalls = [];
+  var routeState = { preferredDeviceMac: '34:DF:2A:4F:74:F5', outputEnabled: false };
+  var routePlugin = new WirelessOutputManager({ coreCommand: {}, logger: {}, configManager: {} });
+  routePlugin.btLog = { info: function () {}, warn: function () {}, error: function () {} };
+  routePlugin.log = { info: function () {}, warn: function () {} };
+  routePlugin._toast = function () {};
+  routePlugin.config = {
+    get: function (key) { return routeState[key]; },
+    set: function (key, value) { routeState[key] = value; }
+  };
+  routePlugin._preferredCodecFor = function () { return 'APTX'; };
+  routePlugin._withPreservedSoftwareVolume = function (operation) { return Promise.resolve().then(operation); };
+  routePlugin._stopPlaybackForRouting = async function () { routeCalls.push('stop'); };
+  routePlugin._ensureBluetoothAudioTransport = async function () { routeCalls.push('transport'); };
+  routePlugin.codecManager = { select: async function () { routeCalls.push('codec'); } };
+  routePlugin.outputManager = {
+    createOutput: async function () { routeCalls.push('output'); return { configured: true }; },
+    removeOutput: async function () { routeCalls.push('rollback'); }
+  };
+  routePlugin.bluetoothVolume = { applySafetyCap: async function () { routeCalls.push('safety-cap'); } };
+  routePlugin.refreshUI = async function () { routeCalls.push('refresh'); };
+  await routePlugin.createBluetoothOutput();
+  assert.deepStrictEqual(routeCalls, ['stop', 'transport', 'codec', 'output', 'safety-cap', 'refresh'],
+    'selected-device safety cap must be verified after codec and output setup, before routing succeeds');
+  assert.strictEqual(routeState.outputEnabled, true);
+
+  routeCalls = [];
+  routeState.outputEnabled = false;
+  routePlugin.bluetoothVolume.applySafetyCap = async function () {
+    routeCalls.push('safety-cap');
+    throw new Error('unsafe device volume');
+  };
+  await assert.rejects(routePlugin.createBluetoothOutput(), /routing returned to the default output/,
+    'unsafe Bluetooth device volume must fail closed');
+  assert.deepStrictEqual(routeCalls, ['stop', 'transport', 'codec', 'output', 'safety-cap', 'rollback']);
+  assert.strictEqual(routeState.outputEnabled, false, 'failed device-volume safety must leave default routing active');
+
+  var uiSoftwareVolume = 40;
+  var softwareControlWrites = [];
+  var softwareControlPlugin = new WirelessOutputManager({ coreCommand: {}, logger: {}, configManager: {} });
+  softwareControlPlugin.btLog = { info: function () {}, error: function () {} };
+  softwareControlPlugin._toast = function () {};
+  softwareControlPlugin.volumioApi = {
+    getState: async function () {
+      return { volume: uiSoftwareVolume, mute: false, disableVolumeControl: false };
+    },
+    setVolume: async function (value) {
+      softwareControlWrites.push(value);
+      uiSoftwareVolume = Number(value) - 2; // Representative Bluetooth step quantization.
+    }
+  };
+  var softwareRefreshes = 0;
+  softwareControlPlugin.refreshUI = async function () { softwareRefreshes += 1; };
+  var softwareControlResult = await softwareControlPlugin.setVolumioSoftwareVolume({
+    volumioSoftwareVolume: { value: 25 }
+  });
+  assert.deepStrictEqual(softwareControlWrites, [25]);
+  assert.strictEqual(softwareControlResult.actual, 23, 'software-volume control must accept small Bluetooth quantization');
+  assert.strictEqual(softwareRefreshes, 1, 'software-volume control must refresh both displayed volume values');
 
   var recoveryMac = '34:09:C9:B0:39:B6';
   var recoveryCalls = [];
