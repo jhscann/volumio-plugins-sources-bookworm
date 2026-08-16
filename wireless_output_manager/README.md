@@ -30,6 +30,7 @@ Other Volumio 4 devices, Bluetooth speakers and audio configurations remain unte
 - runtime resolution of a paired speaker's owning Bluetooth controller, including systems where `hci0` and `hci1` change across reboots.
 - automatic or explicit per-device codec selection for speakers, headphones and earbuds, using codecs shared by BlueALSA and the connected device;
 - guarded LDAC enablement when the installed BlueALSA build already contains an LDAC encoder.
+- one bounded, selected-device reconnect when BlueZ reports a connection but BlueALSA has no usable audio stream, such as immediately after the codec service is restarted;
 
 The plugin does **not** install or replace BlueALSA, PulseAudio or PipeWire and does **not** edit `/etc/mpd.conf` directly. On a compatible BlueALSA installation it adds one plugin-owned systemd drop-in that enables the already-installed LDAC codec. The existing service command and profiles are preserved, the result is verified, and a failed change is rolled back.
 
@@ -60,6 +61,8 @@ volumio plugin install
 Confirm the warning for manually installed, unverified plugins. After installation, open **Plugins**, enable **Wireless Output Manager**, then open its settings page.
 
 During installation, a compatible BlueALSA service is restarted once to enable its existing LDAC encoder. Bluetooth devices may disconnect briefly and can then be reconnected normally. SBC remains available. If LDAC cannot be verified, the installer restores the previous service configuration and the plugin continues with the codecs already provided by the system.
+
+If BlueZ retains a stale connected state after that restart but no Bluetooth audio stream exists, the first **Play on Bluetooth speaker** request performs one bounded reconnect of the selected device on its owning adapter. It does not restart Bluetooth, change the default adapter or touch unrelated devices.
 
 The `/tmp/wireless-output-manager-src` checkout may disappear after a reboot. That does not remove the installed plugin. Clone it again if you later need a fresh source checkout.
 

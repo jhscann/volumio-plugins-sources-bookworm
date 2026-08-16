@@ -237,6 +237,61 @@ async function main() {
   assert.strictEqual(stopCalls, 1, 'manual route switch must stop playback');
   assert(Date.now() - started >= 900, 'manual route switch must allow MPD to release the PCM');
 
+  var recoveryMac = '34:09:C9:B0:39:B6';
+  var recoveryCalls = [];
+  var recoveryChecks = 0;
+  var recoveryPlugin = new WirelessOutputManager({ coreCommand: {}, logger: {}, configManager: {} });
+  recoveryPlugin.transportPollDelayMs = 1;
+  recoveryPlugin.transportPollAttempts = 3;
+  recoveryPlugin.btLog = { info: function () {}, warn: function () {} };
+  recoveryPlugin.codecManager = {
+    getStatus: async function (id) {
+      recoveryCalls.push('status-' + id);
+      recoveryChecks += 1;
+      return recoveryChecks < 3
+        ? { available: true, deviceConnected: false, pcmPath: '' }
+        : { available: true, deviceConnected: true, pcmPath: '/org/bluealsa/hci0/dev_34_09_C9_B0_39_B6/a2dpsrc/sink' };
+    }
+  };
+  recoveryPlugin.bluetooth = {
+    getDeviceInfo: async function (id) {
+      recoveryCalls.push('info-' + id);
+      return { id: id, connected: true, adapterAddress: '3C:78:95:C9:CC:29' };
+    },
+    disconnect: async function (id) { recoveryCalls.push('disconnect-' + id); },
+    connect: async function (id) { recoveryCalls.push('connect-' + id); }
+  };
+  var recovered = await Promise.all([
+    recoveryPlugin._ensureBluetoothAudioTransport(recoveryMac),
+    recoveryPlugin._ensureBluetoothAudioTransport(recoveryMac)
+  ]);
+  assert.strictEqual(recovered[0].deviceConnected, true, 'stale connected devices must recover a BlueALSA PCM');
+  assert.strictEqual(recoveryCalls.filter(function (call) { return call === 'disconnect-' + recoveryMac; }).length, 1,
+    'concurrent stale-transport recovery must disconnect only the selected device once');
+  assert.strictEqual(recoveryCalls.filter(function (call) { return call === 'connect-' + recoveryMac; }).length, 1,
+    'concurrent stale-transport recovery must reconnect only the selected device once');
+  assert.strictEqual(recoveryCalls.some(function (call) { return call.indexOf('A0:4A:5E:D9:98:F5') !== -1; }), false,
+    'stale-transport recovery must not operate on an unrelated Surface Dial');
+
+  recoveryCalls = [];
+  recoveryPlugin.codecManager.getStatus = async function () {
+    return { available: true, deviceConnected: true, pcmPath: '/org/bluealsa/hci1/dev_34_09_C9_B0_39_B6/a2dpsrc/sink' };
+  };
+  await recoveryPlugin._ensureBluetoothAudioTransport(recoveryMac);
+  assert.deepStrictEqual(recoveryCalls, [], 'a healthy BlueALSA transport must not trigger any Bluetooth operation');
+
+  recoveryPlugin.transportPollAttempts = 2;
+  recoveryPlugin.codecManager.getStatus = async function () {
+    return { available: true, deviceConnected: false, pcmPath: '' };
+  };
+  recoveryPlugin.bluetooth.getDeviceInfo = async function () {
+    return { id: recoveryMac, connected: false, adapterAddress: '3C:78:95:C9:CC:29' };
+  };
+  recoveryPlugin.bluetooth.connect = async function (id) { recoveryCalls.push('connect-' + id); };
+  await assert.rejects(recoveryPlugin._ensureBluetoothAudioTransport(recoveryMac),
+    /audio stream did not become available/,
+    'transport recovery must stop after a bounded number of checks');
+
   plugin.log = { info: function () {} };
   plugin.outputManager = { getStatus: function () { return Promise.resolve({ configured: false }); } };
   plugin.config = { get: function () { return false; }, set: function () {} };

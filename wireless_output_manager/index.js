@@ -19,6 +19,9 @@ function WirelessOutputManager(context) {
   this.configManager = context.configManager;
   this.reconnectTimer = null;
   this.reconnectBusy = false;
+  this.transportRecoveries = {};
+  this.transportPollAttempts = 10;
+  this.transportPollDelayMs = 500;
   this.lastError = '';
   this.lastDiagnostics = null;
   this.devices = [];
@@ -118,6 +121,48 @@ WirelessOutputManager.prototype._stopPlaybackForRouting = function () {
     return Promise.reject(new Error('Unable to stop playback before switching output: ' + error.message));
   }
   return new Promise(function (resolve) { setTimeout(resolve, 1000); });
+};
+
+WirelessOutputManager.prototype._ensureBluetoothAudioTransport = function (deviceId) {
+  var self = this;
+  var mac = String(deviceId || '').toUpperCase();
+  if (!BluetoothAdapter.MAC_RE.test(mac)) {
+    return Promise.reject(new Error('Choose a Bluetooth audio device before routing playback'));
+  }
+  if (self.transportRecoveries[mac]) return self.transportRecoveries[mac];
+
+  self.transportRecoveries[mac] = Promise.resolve().then(async function () {
+    var status = await self.codecManager.getStatus(mac);
+    if (!status.available) {
+      throw new Error('BlueALSA audio service is unavailable' + (status.error ? ': ' + status.error : ''));
+    }
+    if (status.deviceConnected) return status;
+
+    var device = await self.bluetooth.getDeviceInfo(mac);
+    self.btLog.warn('Recovering missing BlueALSA audio stream for ' + mac +
+      (device.adapterAddress ? ' on adapter ' + device.adapterAddress : ''));
+    if (device.connected) {
+      await self.bluetooth.disconnect(mac).catch(function (error) {
+        self.btLog.warn('The stale Bluetooth connection changed before it could be disconnected: ' + error.message);
+      });
+      await new Promise(function (resolve) { setTimeout(resolve, self.transportPollDelayMs); });
+    }
+    await self.bluetooth.connect(mac);
+
+    for (var attempt = 0; attempt < self.transportPollAttempts; attempt += 1) {
+      status = await self.codecManager.getStatus(mac);
+      if (status.deviceConnected) {
+        self.btLog.info('BlueALSA audio stream recovered for ' + mac + ' using ' + status.pcmPath);
+        return status;
+      }
+      if (attempt + 1 < self.transportPollAttempts) {
+        await new Promise(function (resolve) { setTimeout(resolve, self.transportPollDelayMs); });
+      }
+    }
+    throw new Error('The selected Bluetooth device connected, but its audio stream did not become available');
+  }).finally(function () { delete self.transportRecoveries[mac]; });
+
+  return self.transportRecoveries[mac];
 };
 
 WirelessOutputManager.prototype._returnToDefaultIfWireless = async function () {
@@ -542,6 +587,8 @@ WirelessOutputManager.prototype.createBluetoothOutput = function () {
   var self = this;
   return self._action('Creating guarded BlueALSA output', function () {
     return self._stopPlaybackForRouting().then(function () {
+      return self._ensureBluetoothAudioTransport(self.config.get('preferredDeviceMac'));
+    }).then(function () {
       return self.codecManager.select(
         self.config.get('preferredDeviceMac'),
         self._preferredCodecFor(self.config.get('preferredDeviceMac'))
