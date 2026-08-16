@@ -2,75 +2,83 @@
   "page": {"label": "TRANSLATE.WIRELESS_OUTPUT_MANAGER"},
   "sections": [
     {
-      "id": "speakerSetup",
+      "id": "currentOutput",
       "element": "section",
-      "label": "TRANSLATE.BLUETOOTH_SPEAKER",
+      "label": "TRANSLATE.CURRENT_OUTPUT",
+      "icon": "fa-volume-up",
+      "description": "TRANSLATE.CURRENT_OUTPUT_NOTE",
+      "content": [
+        {"id": "createOutput", "element": "button", "label": "TRANSLATE.PLAY_ON_WIRELESS", "onClick": {"type": "plugin", "endpoint": "system_hardware/wireless_output_manager", "method": "createBluetoothOutput", "data": []}},
+        {"id": "removeOutput", "element": "button", "label": "TRANSLATE.PLAY_ON_DEFAULT", "onClick": {"type": "plugin", "endpoint": "system_hardware/wireless_output_manager", "method": "removeBluetoothOutput", "data": []}}
+      ]
+    },
+    {
+      "id": "bluetoothDevices",
+      "element": "section",
+      "label": "TRANSLATE.BLUETOOTH_DEVICES",
       "icon": "fa-bluetooth-b",
       "description": "TRANSLATE.DISCOVERY_INTRO",
       "onSave": {"type": "controller", "endpoint": "system_hardware/wireless_output_manager", "method": "pairAndConnectDevice"},
-      "saveButton": {"label": "TRANSLATE.PAIR_AND_CONNECT", "data": ["preferredDevice"]},
+      "saveButton": {"label": "TRANSLATE.SELECT_AND_CONNECT", "data": ["preferredDevice"]},
       "content": [
-        {"id": "scanDevices", "element": "button", "label": "TRANSLATE.SEARCH_FOR_SPEAKERS", "description": "TRANSLATE.FIND_SPEAKERS_NOTE", "onClick": {"type": "plugin", "endpoint": "system_hardware/wireless_output_manager", "method": "scanDevices", "data": []}},
-        {"id": "preferredDevice", "element": "select", "label": "TRANSLATE.AVAILABLE_SPEAKERS", "description": "TRANSLATE.CHOOSE_SPEAKER_NOTE", "value": {"value": "", "label": "No speaker selected"}, "options": []}
+        {"id": "scanDevices", "element": "button", "label": "TRANSLATE.SEARCH_FOR_DEVICES", "description": "TRANSLATE.FIND_SPEAKERS_NOTE", "onClick": {"type": "plugin", "endpoint": "system_hardware/wireless_output_manager", "method": "scanDevices", "data": []}},
+        {"id": "preferredDevice", "element": "select", "label": "TRANSLATE.AVAILABLE_AUDIO_DEVICES", "description": "TRANSLATE.CHOOSE_DEVICE_NOTE", "value": {"value": "", "label": "No device selected"}, "options": []}
       ]
     },
     {
-      "id": "audioOutput",
+      "id": "bluetoothSound",
       "element": "section",
-      "label": "TRANSLATE.AUDIO_DESTINATION",
-      "icon": "fa-volume-up",
-      "description": "TRANSLATE.AUDIO_DESTINATION_NOTE",
-      "hidden": false,
-      "onSave": {"type": "controller", "endpoint": "system_hardware/wireless_output_manager", "method": "saveVolumeSettings"},
-      "saveButton": {"label": "TRANSLATE.APPLY_VOLUME_SETTINGS", "data": ["bluetoothDeviceVolume", "volumioSoftwareVolume"]},
-      "content": [
-        {"id": "createOutput", "element": "button", "label": "TRANSLATE.PLAY_ON_WIRELESS", "hidden": false, "onClick": {"type": "plugin", "endpoint": "system_hardware/wireless_output_manager", "method": "createBluetoothOutput", "data": []}},
-        {"id": "removeOutput", "element": "button", "label": "TRANSLATE.PLAY_ON_DEFAULT", "onClick": {"type": "plugin", "endpoint": "system_hardware/wireless_output_manager", "method": "removeBluetoothOutput", "data": []}},
-        {"id": "bluetoothDeviceVolume", "element": "input", "type": {"name": "number"}, "label": "TRANSLATE.BLUETOOTH_DEVICE_VOLUME", "description": "TRANSLATE.BLUETOOTH_DEVICE_VOLUME_NOTE", "value": 10, "hidden": true, "attributes": [{"min": 0, "max": 100, "step": 1}]},
-        {"id": "volumioSoftwareVolume", "element": "input", "type": {"name": "number"}, "label": "TRANSLATE.VOLUMIO_SOFTWARE_VOLUME", "description": "TRANSLATE.VOLUMIO_SOFTWARE_VOLUME_NOTE", "value": 10, "hidden": true, "attributes": [{"min": 0, "max": 100, "step": 1}]}
-      ]
-    },
-    {
-      "id": "speakerManagement",
-      "element": "section",
-      "label": "TRANSLATE.MANAGE_SPEAKER",
+      "label": "TRANSLATE.BLUETOOTH_SOUND",
       "icon": "fa-headphones",
-      "description": "TRANSLATE.SAVED_SPEAKER_NOTE",
-      "hidden": false,
-      "onSave": {"type": "controller", "endpoint": "system_hardware/wireless_output_manager", "method": "forgetDevice"},
-      "saveButton": {"label": "TRANSLATE.FORGET_SPEAKER", "data": ["pairedDeviceToForget"]},
+      "description": "TRANSLATE.BLUETOOTH_SOUND_NOTE",
+      "onSave": {"type": "controller", "endpoint": "system_hardware/wireless_output_manager", "method": "saveBluetoothSoundSettings"},
+      "saveButton": {"label": "TRANSLATE.APPLY_BLUETOOTH_SOUND", "data": ["preferredCodec", "bluetoothDeviceVolume"]},
       "content": [
-        {"id": "connectDevice", "element": "button", "label": "TRANSLATE.RECONNECT_SPEAKER", "hidden": false, "onClick": {"type": "plugin", "endpoint": "system_hardware/wireless_output_manager", "method": "connectDevice", "data": []}},
-        {"id": "disconnectDevice", "element": "button", "label": "TRANSLATE.DISCONNECT_SPEAKER", "hidden": false, "onClick": {"type": "plugin", "endpoint": "system_hardware/wireless_output_manager", "method": "disconnectDevice", "data": []}},
-        {"id": "pairedDeviceToForget", "element": "select", "label": "TRANSLATE.PAIRED_AUDIO_DEVICES", "description": "TRANSLATE.FORGET_SPEAKER_NOTE", "value": {"value": "", "label": "Select a paired audio device"}, "options": []},
-        {"id": "resetSpeakerSetup", "element": "button", "label": "TRANSLATE.RESET_SPEAKER_SETUP", "description": "TRANSLATE.RESET_SPEAKER_SETUP_NOTE", "onClick": {"type": "plugin", "endpoint": "system_hardware/wireless_output_manager", "method": "resetSpeakerSetup", "data": []}}
+        {"id": "preferredCodec", "element": "select", "label": "TRANSLATE.PREFERRED_CODEC", "description": "TRANSLATE.PREFERRED_CODEC_NOTE", "value": {"value": "AUTO", "label": "Automatic — best available"}, "options": [], "hidden": true},
+        {"id": "bluetoothDeviceVolume", "element": "input", "type": {"name": "number"}, "label": "TRANSLATE.BLUETOOTH_STREAM_VOLUME", "description": "TRANSLATE.BLUETOOTH_STREAM_VOLUME_NOTE", "value": 10, "hidden": true, "attributes": [{"min": 0, "max": 100, "step": 1}]}
       ]
     },
     {
-      "id": "preferences",
+      "id": "deviceManagement",
       "element": "section",
-      "label": "TRANSLATE.PREFERENCES",
+      "label": "TRANSLATE.DEVICE_MANAGEMENT",
+      "icon": "fa-wrench",
+      "description": "TRANSLATE.SAVED_SPEAKER_NOTE",
+      "onSave": {"type": "controller", "endpoint": "system_hardware/wireless_output_manager", "method": "forgetDevice"},
+      "saveButton": {"label": "TRANSLATE.FORGET_PAIRING", "data": ["pairedDeviceToForget"]},
+      "content": [
+        {"id": "connectDevice", "element": "button", "label": "TRANSLATE.RECONNECT_DEVICE", "hidden": true, "onClick": {"type": "plugin", "endpoint": "system_hardware/wireless_output_manager", "method": "connectDevice", "data": []}},
+        {"id": "disconnectDevice", "element": "button", "label": "TRANSLATE.DISCONNECT_DEVICE", "hidden": true, "onClick": {"type": "plugin", "endpoint": "system_hardware/wireless_output_manager", "method": "disconnectDevice", "data": []}},
+        {"id": "pairedDeviceToForget", "element": "select", "label": "TRANSLATE.PAIRED_AUDIO_DEVICES", "description": "TRANSLATE.FORGET_SPEAKER_NOTE", "value": {"value": "", "label": "Select a paired audio device"}, "options": []},
+        {"id": "resetSpeakerSetup", "element": "button", "label": "TRANSLATE.RESET_PLUGIN_SETUP", "description": "TRANSLATE.RESET_PLUGIN_SETUP_NOTE", "onClick": {"type": "plugin", "endpoint": "system_hardware/wireless_output_manager", "method": "resetSpeakerSetup", "data": []}}
+      ]
+    },
+    {
+      "id": "behaviour",
+      "element": "section",
+      "label": "TRANSLATE.BEHAVIOUR",
       "icon": "fa-cog",
       "onSave": {"type": "controller", "endpoint": "system_hardware/wireless_output_manager", "method": "saveSettings"},
-      "saveButton": {"label": "TRANSLATE.SAVE_PREFERENCES", "data": ["autoReconnect", "debugLogging", "preferredCodec"]},
+      "saveButton": {"label": "TRANSLATE.SAVE_BEHAVIOUR", "data": ["autoReconnect"]},
       "content": [
-        {"id": "autoReconnect", "element": "switch", "label": "TRANSLATE.AUTO_RECONNECT_SPEAKER", "description": "TRANSLATE.AUTO_RECONNECT_NOTE", "value": true},
-        {"id": "debugLogging", "element": "switch", "label": "TRANSLATE.DEBUG_LOGGING", "value": false},
-        {"id": "preferredCodec", "element": "select", "label": "TRANSLATE.PREFERRED_CODEC", "description": "TRANSLATE.PREFERRED_CODEC_NOTE", "value": {"value": "AUTO", "label": "Automatic — best available"}, "options": []}
+        {"id": "autoReconnect", "element": "switch", "label": "TRANSLATE.AUTO_RECONNECT_DEVICE", "description": "TRANSLATE.AUTO_RECONNECT_NOTE", "value": true}
       ]
     },
     {
       "id": "diagnostics",
       "element": "section",
-      "label": "TRANSLATE.DIAGNOSTICS",
+      "label": "TRANSLATE.TROUBLESHOOTING",
       "icon": "fa-stethoscope",
       "description": "TRANSLATE.DIAGNOSTICS_NOTE",
+      "onSave": {"type": "controller", "endpoint": "system_hardware/wireless_output_manager", "method": "saveSettings"},
+      "saveButton": {"label": "TRANSLATE.SAVE_LOGGING_SETTING", "data": ["debugLogging"]},
       "content": [
+        {"id": "debugLogging", "element": "switch", "label": "TRANSLATE.DEBUG_LOGGING", "description": "TRANSLATE.DEBUG_LOGGING_NOTE", "value": false},
         {"id": "runDiagnostics", "element": "button", "label": "TRANSLATE.RUN_DIAGNOSTICS", "onClick": {"type": "plugin", "endpoint": "system_hardware/wireless_output_manager", "method": "runDiagnostics", "data": []}},
         {"id": "exportDebugLog", "element": "button", "label": "TRANSLATE.EXPORT_DEBUG_LOG", "onClick": {"type": "plugin", "endpoint": "system_hardware/wireless_output_manager", "method": "exportDebugLog", "data": []}},
         {"id": "refreshUI", "element": "button", "label": "TRANSLATE.REFRESH_STATUS", "onClick": {"type": "controller", "endpoint": "system_hardware/wireless_output_manager", "method": "getUIConfig", "data": []}},
-        {"id": "diagnosticOutput", "element": "textarea", "label": "TRANSLATE.DIAGNOSTIC_OUTPUT", "value": "", "hidden": false},
-        {"id": "lastError", "element": "textarea", "label": "TRANSLATE.LAST_ERROR", "value": "None", "hidden": false}
+        {"id": "diagnosticOutput", "element": "textarea", "label": "TRANSLATE.DIAGNOSTIC_OUTPUT", "value": "", "hidden": true},
+        {"id": "lastError", "element": "textarea", "label": "TRANSLATE.LAST_ERROR", "value": "None", "hidden": true}
       ]
     }
   ]

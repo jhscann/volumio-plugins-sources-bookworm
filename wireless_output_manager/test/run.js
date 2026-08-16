@@ -16,14 +16,16 @@ async function main() {
   assert(uiIds.indexOf('scanDevices') !== -1 && uiIds.indexOf('preferredDevice') !== -1, 'onboarding must expose discovery and speaker selection');
   assert(uiIds.indexOf('pairDevice') === -1 && uiIds.indexOf('trustDevice') === -1, 'low-level pairing controls must stay out of the main UI');
   assert(uiIds.indexOf('createOutput') !== -1 && uiIds.indexOf('removeOutput') !== -1, 'manual audio destination controls must remain available');
-  assert(uiIds.indexOf('bluetoothDeviceVolume') !== -1 && uiIds.indexOf('volumioSoftwareVolume') !== -1,
-    'both volume fields must be available in the routing section');
-  assert.strictEqual(uiConfig.sections[1].onSave.method, 'saveVolumeSettings',
-    'volume fields must use Volumio section-save submission');
-  assert.deepStrictEqual(uiConfig.sections[1].saveButton.data,
-    ['bluetoothDeviceVolume', 'volumioSoftwareVolume']);
-  assert.deepStrictEqual(uiConfig.sections[1].content[2].type, { name: 'number' },
-    'volume fields must use Volumio native number-input definitions');
+  assert(uiIds.indexOf('bluetoothDeviceVolume') !== -1 && uiIds.indexOf('volumioSoftwareVolume') === -1,
+    'the UI must expose Bluetooth stream volume without presenting Volumio volume as dependable Bluetooth control');
+  assert.strictEqual(uiConfig.sections[2].onSave.method, 'saveBluetoothSoundSettings',
+    'codec and Bluetooth stream volume must share one device-specific section save');
+  assert.deepStrictEqual(uiConfig.sections[2].saveButton.data,
+    ['preferredCodec', 'bluetoothDeviceVolume']);
+  assert.deepStrictEqual(uiConfig.sections[2].content[1].type, { name: 'number' },
+    'Bluetooth stream volume must use Volumio native number-input definitions');
+  assert.strictEqual(uiConfig.sections[0].id, 'currentOutput', 'output and recovery controls must remain first');
+  assert.strictEqual(uiConfig.sections[0].content[1].id, 'removeOutput', 'return-to-default recovery must always be present');
   assert(uiIds.indexOf('pairedDeviceToForget') !== -1, 'paired-device selection must be available for pairing removal');
   assert(uiIds.indexOf('resetSpeakerSetup') !== -1, 'safe plugin-only reset must remain available');
 
@@ -572,25 +574,30 @@ async function main() {
   assert.strictEqual(softwareRefreshes, 1, 'software-volume control must refresh both displayed volume values');
 
   var combinedDeviceVolume = null;
-  var combinedSoftwareVolume = 40;
+  var combinedSettings = {
+    preferredDeviceMac: '34:DF:2A:4F:74:F5',
+    codecPreferences: '{}'
+  };
   var combinedPlugin = new WirelessOutputManager({ coreCommand: {}, logger: {}, configManager: {} });
   combinedPlugin.btLog = { info: function () {}, error: function () {} };
   combinedPlugin._toast = function () {};
-  combinedPlugin.config = { get: function () { return '34:DF:2A:4F:74:F5'; } };
+  combinedPlugin.config = {
+    get: function (key) { return combinedSettings[key]; },
+    set: function (key, value) { combinedSettings[key] = value; }
+  };
   combinedPlugin.bluetooth = { getDeviceInfo: async function () { return { connected: true }; } };
   combinedPlugin.bluetoothVolume = { setVolume: async function (deviceId, value) { combinedDeviceVolume = value; } };
-  combinedPlugin.volumioApi = {
-    getState: async function () {
-      return { volume: combinedSoftwareVolume, mute: false, disableVolumeControl: false };
-    },
-    setVolume: async function (value) { combinedSoftwareVolume = Number(value); }
-  };
+  combinedPlugin.codecManager = { normalize: function (value) { return String(value).toUpperCase(); } };
   var combinedRefreshes = 0;
   combinedPlugin.refreshUI = async function () { combinedRefreshes += 1; };
-  await combinedPlugin.saveVolumeSettings({ bluetoothDeviceVolume: '20', volumioSoftwareVolume: '25' });
-  assert.strictEqual(combinedDeviceVolume, 20, 'section save must apply selected-device volume');
-  assert.strictEqual(combinedSoftwareVolume, 25, 'section save must apply Volumio software volume');
-  assert.strictEqual(combinedRefreshes, 1, 'combined volume save must refresh the displayed values once');
+  await combinedPlugin.saveBluetoothSoundSettings({
+    preferredCodec: [{ value: { value: 'aptX' } }],
+    bluetoothDeviceVolume: '20'
+  });
+  assert.strictEqual(combinedDeviceVolume, 20, 'Bluetooth sound save must apply stream volume');
+  assert.strictEqual(JSON.parse(combinedSettings.codecPreferences)['34:DF:2A:4F:74:F5'], 'APTX',
+    'Bluetooth sound save must store the per-device codec preference');
+  assert.strictEqual(combinedRefreshes, 1, 'Bluetooth sound save must refresh displayed device settings once');
 
   var recoveryMac = '34:09:C9:B0:39:B6';
   var recoveryCalls = [];
@@ -759,7 +766,7 @@ async function main() {
   };
   var failedResult = await switchPlugin.pairAndConnectDevice({ preferredDevice: [{ value: newId, label: 'Speaker B' }] });
   assert.strictEqual(failedResult.success, false, 'unavailable speakers must return a handled failure result');
-  assert(/current speaker and audio route were not changed/.test(failedResult.error), 'failed preflight must explain that the working route is preserved');
+  assert(/current device and audio route were not changed/.test(failedResult.error), 'failed preflight must explain that the working route is preserved');
   assert.strictEqual(switchState.preferredDeviceMac, oldId, 'failed speaker switch must preserve the previous preference');
   assert.strictEqual(switchCalls.indexOf('default-output'), -1, 'failed preflight must not change the working route');
   assert.strictEqual(switchCalls.indexOf('disconnect-' + oldId), -1, 'failed preflight must not disconnect the working speaker');
@@ -847,32 +854,42 @@ async function main() {
   plugin.bluetooth = { getStatus: async function () { return { preferred: { paired: true, connected: true } }; } };
   plugin.devices = [];
   await plugin.getUIConfig();
-  assert.strictEqual(uiWrites['sections[1].hidden'], false, 'audio destination must appear for a saved speaker');
-  assert.strictEqual(uiWrites['sections[1].content[0].hidden'], false, 'wireless destination must appear for a connected speaker');
-  assert.strictEqual(uiWrites['sections[2].content[0].hidden'], true, 'reconnect must hide while connected');
-  assert.strictEqual(uiWrites['sections[2].content[1].hidden'], false, 'disconnect must show while connected');
-  assert(uiWrites['sections[3].content[2].options'].some(function (option) {
+  assert(/Music output: the default device/.test(uiWrites['sections[0].description']),
+    'current output status must remain visible for a saved device');
+  assert.strictEqual(uiWrites['sections[3].content[0].hidden'], true, 'reconnect must hide while connected');
+  assert.strictEqual(uiWrites['sections[3].content[1].hidden'], false, 'disconnect must show while connected');
+  assert(uiWrites['sections[2].content[0].options'].some(function (option) {
     return option.value === 'APTX' && option.label === 'aptX';
   }), 'codec selector must expose standard aptX with a human-readable label');
-  assert(uiWrites['sections[3].content[2].options'].some(function (option) {
+  assert(uiWrites['sections[2].content[0].options'].some(function (option) {
     return option.value === 'APTX-HD' && option.label === 'aptX HD — high quality';
   }), 'codec selector must expose aptX HD with a human-readable label');
 
   uiWrites = {};
+  uiValues.outputEnabled = true;
+  await plugin.getUIConfig();
+  assert(/Volumio may display 100%/.test(uiWrites['sections[0].description']),
+    'active Bluetooth output must explain the known Volumio volume-display behaviour');
+  assert(/no automatic fallback/i.test(uiWrites['sections[0].description']),
+    'active Bluetooth output must state that fallback is manual');
+
+  uiWrites = {};
+  uiValues.outputEnabled = false;
   uiValues.preferredDeviceMac = '';
   uiValues.preferredDeviceName = '';
   plugin.bluetooth.getStatus = async function () { return { preferred: null }; };
   plugin.devices = [];
   await plugin.getUIConfig();
-  assert.strictEqual(uiWrites['sections[1].hidden'], true, 'audio destination must hide until a speaker is saved');
-  assert.strictEqual(uiWrites['sections[2].hidden'], true, 'speaker management must hide until a speaker is saved');
+  assert(/Music output: the default device/.test(uiWrites['sections[0].description']),
+    'default-output recovery status must remain visible without a saved device');
+  assert.strictEqual(uiWrites['sections[2].content[0].hidden'], true,
+    'device codec control must hide until a Bluetooth device is selected');
 
   uiWrites = {};
   plugin.devices = [{ id: 'AA:BB:CC:DD:EE:02', name: 'Kitchen', paired: true, connected: false, audioCapable: true }];
   await plugin.getUIConfig();
-  assert.strictEqual(uiWrites['sections[2].hidden'], false, 'paired-device management must remain visible without a preferred speaker');
-  assert.strictEqual(uiWrites['sections[2].content[2].hidden'], false, 'paired audio selector must show for disconnected paired devices');
-  assert.strictEqual(uiWrites['sections[2].content[3].hidden'], true, 'plugin-only reset must hide when no speaker is selected');
+  assert.strictEqual(uiWrites['sections[3].content[2].hidden'], false, 'paired audio selector must show for disconnected paired devices');
+  assert.strictEqual(uiWrites['sections[3].content[3].hidden'], true, 'plugin-only reset must hide when no device is selected');
   console.log('All tests passed');
 }
 

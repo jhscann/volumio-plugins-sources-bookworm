@@ -103,7 +103,7 @@ WirelessOutputManager.prototype._preferredCodecFor = function (deviceId) {
 
 WirelessOutputManager.prototype._setPreferredCodecFor = function (deviceId, codec) {
   var mac = String(deviceId || '').toUpperCase();
-  if (!BluetoothAdapter.MAC_RE.test(mac)) throw new Error('Choose a speaker before saving its codec preference');
+  if (!BluetoothAdapter.MAC_RE.test(mac)) throw new Error('Choose a Bluetooth audio device before saving its codec preference');
   var preferences = this._codecPreferences();
   preferences[mac] = this.codecManager.normalize(codec);
   this.config.set('codecPreferences', JSON.stringify(preferences));
@@ -321,7 +321,7 @@ WirelessOutputManager.prototype._reconnectPreferred = async function () {
     }
     this.lastError = '';
   } catch (error) {
-    this.lastError = 'Preferred speaker is unavailable: ' + error.message;
+    this.lastError = 'Selected Bluetooth audio device is unavailable: ' + error.message;
     this.btLog.warn(this.lastError);
   } finally {
     this.reconnectBusy = false;
@@ -412,21 +412,21 @@ WirelessOutputManager.prototype.getUIConfig = function () {
     path.join(__dirname, 'i18n', 'strings_en.json'), path.join(__dirname, 'UIConfig.json')
   ).then(async function (ui) {
     function set(index, key, value) { self.configManager.setUIConfigParam(ui, index + '.' + key, value); }
-    set('sections[3].content[0]', 'value', Boolean(self.config.get('autoReconnect')));
-    set('sections[3].content[1]', 'value', Boolean(self.config.get('debugLogging')));
+    set('sections[4].content[0]', 'value', Boolean(self.config.get('autoReconnect')));
+    set('sections[5].content[0]', 'value', Boolean(self.config.get('debugLogging')));
     var preferred = self.config.get('preferredDeviceMac') || '';
     var preferredCodec = self._preferredCodecFor(preferred);
-    var preferredName = self.config.get('preferredDeviceName') || 'No speaker selected';
+    var preferredName = self.config.get('preferredDeviceName') || 'No device selected';
     if (!self.devices.length) await self._loadKnownDevices().catch(function () {});
     var status = await self.bluetooth.getStatus(preferred).catch(function (error) { return { available: false, lastError: error.message }; });
     var options = self._speakerOptions(preferred, status.preferred);
     var selectedOption = options.find(function (device) { return device.id === preferred; });
-    set('sections[0].content[1]', 'value', {
+    set('sections[1].content[1]', 'value', {
       value: preferred,
       label: selectedOption ? self._speakerOptionLabel(selectedOption, preferred) : preferredName
     });
     options.forEach(function (device) {
-      self.configManager.pushUIConfigParam(ui, 'sections[0].content[1].options', {
+      self.configManager.pushUIConfigParam(ui, 'sections[1].content[1].options', {
         value: device.id,
         label: self._speakerOptionLabel(device, preferred)
       });
@@ -453,79 +453,98 @@ WirelessOutputManager.prototype.getUIConfig = function () {
       }
     });
     var selectedCodecOption = codecOptions.find(function (option) { return option.value === preferredCodec; });
-    set('sections[3].content[2]', 'options', codecOptions);
-    set('sections[3].content[2]', 'value', selectedCodecOption || codecOptions[0]);
-    set('sections[3].content[2]', 'hidden', !preferred);
-    if (connectedAudio.length > 1) set('sections[0]', 'description', 'Selected: ' + preferredName + '. Also connected: ' + connectedNames.filter(function (name) { return name !== preferredName; }).join(', ') + '. Choose one speaker and select Use selected speaker. Other audio speakers will disconnect but remain paired; music will move to the default output until you choose Play on Bluetooth speaker.');
-    else if (connected) set('sections[0]', 'description', preferredName + ' is selected and connected. To change speakers: search, choose another speaker, then select Use selected speaker. The current speaker will disconnect but remain paired. Next, choose Play on Bluetooth speaker.');
-    else if (paired) set('sections[0]', 'description', preferredName + ' is saved but disconnected. Use Reconnect speaker below, or search to choose another speaker.');
-    else set('sections[0]', 'description', 'Put your speaker in pairing mode, select Search for speakers, choose it from the list, then select Use selected speaker.');
-    set('sections[1]', 'hidden', !preferred);
-    set('sections[1].content[0]', 'hidden', !connected);
+    set('sections[2].content[0]', 'options', codecOptions);
+    set('sections[2].content[0]', 'value', selectedCodecOption || codecOptions[0]);
+    set('sections[2].content[0]', 'hidden', !preferred);
+    set('sections[2]', 'hidden', !preferred);
+
+    if (connectedAudio.length > 1) {
+      set('sections[1]', 'description', 'Selected: ' + preferredName + '. Also connected: ' +
+        connectedNames.filter(function (name) { return name !== preferredName; }).join(', ') +
+        '. Choose one device and select Select and connect. Other Bluetooth audio devices will disconnect but remain paired. Music output does not change automatically.');
+    } else if (connected) {
+      set('sections[1]', 'description', preferredName +
+        ' is selected and connected. To change devices, choose another one and select Select and connect. Music output does not change automatically.');
+    } else if (paired) {
+      set('sections[1]', 'description', preferredName +
+        ' is selected but disconnected. Switch it on and use Reconnect selected device, or choose another device and select Select and connect.');
+    } else {
+      set('sections[1]', 'description',
+        'For a new device: put it in pairing mode, search, choose it from the list, then select Select and connect. A previously paired device normally only needs to be switched on.');
+    }
+
     var bluetoothDeviceVolume = connected && self.bluetoothVolume
       ? await self.bluetoothVolume.getVolume(preferred).catch(function (error) {
-        self.btLog.warn('Unable to read selected Bluetooth device volume for the UI: ' + error.message);
+        self.btLog.warn('Unable to read selected Bluetooth stream volume for the UI: ' + error.message);
         return null;
       })
       : null;
-    set('sections[1].content[2]', 'hidden', !bluetoothDeviceVolume);
+    set('sections[2].content[1]', 'hidden', !bluetoothDeviceVolume);
     if (bluetoothDeviceVolume) {
-      set('sections[1].content[2]', 'value', bluetoothDeviceVolume.maximum);
-      set('sections[1].content[2]', 'description',
-        'Current selected-device hardware volume: ' + bluetoothDeviceVolume.maximum + '%. This is separate from Volumio software volume. Routing caps it at 10% for a safe start; raise it only after playback starts safely.');
+      set('sections[2].content[1]', 'value', bluetoothDeviceVolume.maximum);
+      set('sections[2].content[1]', 'description',
+        'Current Bluetooth stream volume: ' + bluetoothDeviceVolume.maximum +
+        '%. This is local BlueALSA digital gain, not necessarily the device\'s physical volume. Routing caps it at 10% for safety; increase it gradually after playback begins.');
     }
-    var playerVolumeState = self.volumioApi ? await self.volumioApi.getState().catch(function (error) {
-      self.log.warn('Unable to read Volumio software volume for the UI: ' + error.message);
-      return null;
-    }) : null;
-    var softwareVolumeAvailable = playerVolumeState && playerVolumeState.disableVolumeControl !== true &&
-      Number.isFinite(Number(playerVolumeState.volume));
-    set('sections[1].content[3]', 'hidden', !softwareVolumeAvailable);
-    if (softwareVolumeAvailable) {
-      set('sections[1].content[3]', 'value', Number(playerVolumeState.volume));
-      set('sections[1].content[3]', 'description',
-        'Current Volumio software volume: ' + Number(playerVolumeState.volume) + '%. This is separate from the selected Bluetooth device volume; effective loudness depends on both. Change Hardware or Software mixer mode only in Volumio Playback Options.');
+
+    var outputDescription;
+    if (outputEnabled && connected) {
+      outputDescription = 'Music output: ' + preferredName + ' over Bluetooth. Changing output stops playback; press Play afterward. ' +
+        'There is no automatic fallback. Volumio may display 100% after Bluetooth playback starts; actual loudness is controlled by Bluetooth stream volume and the device\'s own controls.';
+    } else if (outputEnabled) {
+      outputDescription = 'Music output is still set to ' + preferredName + ', but the device is disconnected. ' +
+        'Reconnect it or return to the default audio output. There is no automatic fallback.';
+    } else if (preferred) {
+      outputDescription = 'Music output: the default device selected in Volumio Playback Options. Selected Bluetooth device: ' +
+        preferredName + ' — ' + (connected ? 'connected' : 'disconnected') +
+        '. Changing output stops playback; press Play afterward.';
+    } else {
+      outputDescription = 'Music output: the default device selected in Volumio Playback Options. ' +
+        'Select and connect a Bluetooth audio device before choosing Bluetooth output.';
     }
-    var audioDestinationDescription = outputEnabled
-      ? 'Music is routed to ' + preferredName + '. If the device turns off or disconnects, there is no automatic fallback: choose Play on default audio output manually. For a safe start, routing stops playback, temporarily mutes Volumio at 0%, and caps only the selected Bluetooth device at 10%. Increase its volume afterward only when safe.'
-      : 'Music is routed to the default device selected in Volumio Playback Options. To use the connected saved device, choose Play on Bluetooth speaker, then press Play. For a safe start, the selected Bluetooth device is capped at 10%; Volumio restores its previous volume and mute state automatically.';
-    if (playerVolumeState) {
-      audioDestinationDescription += playerVolumeState.disableVolumeControl === true
-        ? ' Volumio volume control is disabled, as with Hardware mixer mode. Change mixer mode only in Volumio Playback Options.'
-        : ' Volumio software volume is enabled. Effective loudness depends on both Volumio and Bluetooth device volume.';
-    }
-    set('sections[1]', 'description', audioDestinationDescription);
+    set('sections[0]', 'description', outputDescription);
+
     var pairedAudio = options.filter(function (device) { return device.paired && device.audioCapable === true; });
-    set('sections[2]', 'hidden', !preferred && pairedAudio.length === 0);
-    set('sections[2].content[0]', 'hidden', !preferred || connected);
-    set('sections[2].content[1]', 'hidden', !connected);
+    set('sections[3]', 'hidden', !preferred && pairedAudio.length === 0);
+    set('sections[3].content[0]', 'hidden', !preferred || connected);
+    set('sections[3].content[1]', 'hidden', !connected);
     pairedAudio.forEach(function (device) {
-      self.configManager.pushUIConfigParam(ui, 'sections[2].content[2].options', {
+      self.configManager.pushUIConfigParam(ui, 'sections[3].content[2].options', {
         value: device.id,
         label: self._speakerOptionLabel(device, preferred)
       });
     });
-    set('sections[2].content[2]', 'value', {
+    set('sections[3].content[2]', 'value', {
       value: '',
       label: pairedAudio.length ? 'Select a paired audio device' : 'No paired audio devices'
     });
-    set('sections[2].content[2]', 'hidden', pairedAudio.length === 0);
-    set('sections[2].content[3]', 'hidden', !preferred);
+    set('sections[3].content[2]', 'hidden', pairedAudio.length === 0);
+    set('sections[3].content[3]', 'hidden', !preferred);
+
     var codecDescription;
     var preferredCodecName = self.codecManager.displayName(preferredCodec);
-    if (!preferred) codecDescription = 'Choose a speaker before selecting a Bluetooth audio codec.';
-    else if (!connected) codecDescription = 'Saved for ' + preferredName + ': ' + preferredCodecName + '. Connect the Bluetooth audio device to see the codecs it shares with Volumio.';
+    if (!preferred) {
+      codecDescription = 'Select and connect a Bluetooth audio device to configure its codec and stream volume.';
+    } else if (!connected) {
+      codecDescription = 'Sound settings for ' + preferredName + '. Saved codec preference: ' + preferredCodecName +
+        '. Connect the device to see mutually available codecs and adjust stream volume.';
+    }
     else {
-      codecDescription = 'Saved for ' + preferredName + ': ' + preferredCodecName + '. Active: ' + (codecStatus.activeCodec ? self.codecManager.displayName(codecStatus.activeCodec) : 'unknown') +
+      codecDescription = 'Sound settings for ' + preferredName + '. Codec preference: ' + preferredCodecName + '. Active: ' + (codecStatus.activeCodec ? self.codecManager.displayName(codecStatus.activeCodec) : 'unknown') +
         '. Available: ' + (codecStatus.availableCodecs.map(function (codec) { return self.codecManager.displayName(codec); }).join(', ') || 'none reported') +
-        '. Automatic chooses LDAC, aptX HD, AAC, aptX, then SBC. The choice is applied when you select Play on Bluetooth speaker. For safety, only the selected Bluetooth device is capped at 10% before playback; increase it afterward only when safe.';
+        '. Automatic chooses LDAC, aptX HD, AAC, aptX, then SBC. A codec change is applied the next time Bluetooth output is selected. ' +
+        'Bluetooth stream volume is local digital gain and is capped at 10% whenever Bluetooth routing starts.';
       if (codecStatus.systemCodecs.indexOf('AAC') === -1) codecDescription += ' AAC is not available in the installed BlueALSA build.';
     }
-    set('sections[3].content[2]', 'description', codecDescription);
-    set('sections[4].content[3]', 'value', self.lastDiagnostics ? JSON.stringify(self.lastDiagnostics, null, 2) : 'Run diagnostics to collect system state.');
-    set('sections[4].content[4]', 'value', self.lastError || 'None');
-    set('sections[4].content[3]', 'hidden', !self.lastDiagnostics);
-    set('sections[4].content[4]', 'hidden', !self.lastError);
+    set('sections[2]', 'description', codecDescription);
+    set('sections[2].content[0]', 'description', preferred
+      ? 'Saved for ' + preferredName + '. The choice is applied and verified the next time Bluetooth output is selected.'
+      : 'Select a Bluetooth audio device first.');
+
+    set('sections[5].content[4]', 'value', self.lastDiagnostics ? JSON.stringify(self.lastDiagnostics, null, 2) : 'Run diagnostics to collect system state.');
+    set('sections[5].content[5]', 'value', self.lastError || 'None');
+    set('sections[5].content[4]', 'hidden', !self.lastDiagnostics);
+    set('sections[5].content[5]', 'hidden', !self.lastError);
     return ui;
   });
 };
@@ -548,12 +567,51 @@ WirelessOutputManager.prototype.saveSettings = function (data) {
   return libQ.resolve();
 };
 
+WirelessOutputManager.prototype.saveBluetoothSoundSettings = function (data) {
+  var self = this;
+  return self._action('Applying Bluetooth sound settings', async function () {
+    data = data || {};
+    var deviceId = String(self.config.get('preferredDeviceMac') || '').toUpperCase();
+    if (!BluetoothAdapter.MAC_RE.test(deviceId)) {
+      throw new Error('Select and connect a Bluetooth audio device first');
+    }
+
+    var changed = [];
+    if (data.preferredCodec !== undefined) {
+      var submittedCodec = data.preferredCodec;
+      for (var depth = 0; depth < 5 && submittedCodec && typeof submittedCodec === 'object'; depth += 1) {
+        if (Array.isArray(submittedCodec)) submittedCodec = submittedCodec[0];
+        else if (Object.prototype.hasOwnProperty.call(submittedCodec, 'value')) submittedCodec = submittedCodec.value;
+        else break;
+      }
+      self._setPreferredCodecFor(deviceId, submittedCodec);
+      changed.push('codec preference');
+    }
+
+    if (data.bluetoothDeviceVolume !== undefined) {
+      var info = await self.bluetooth.getDeviceInfo(deviceId).catch(function () { return null; });
+      if (info && info.connected) {
+        var streamVolume = self._submittedNumber(
+          data, 'bluetoothDeviceVolume', 'Bluetooth stream volume');
+        await self.bluetoothVolume.setVolume(deviceId, streamVolume);
+        changed.push('Bluetooth stream volume');
+      }
+    }
+
+    if (!changed.length) {
+      throw new Error('Connect the selected Bluetooth device before changing its stream volume');
+    }
+    await self.refreshUI();
+    return { changed: changed };
+  }, 'Bluetooth sound settings saved');
+};
+
 WirelessOutputManager.prototype.pairAndConnectDevice = function (data) {
   var self = this;
   var id = self._selected(data);
   if (!BluetoothAdapter.MAC_RE.test(id)) {
-    self._toast('error', 'Find and select a Bluetooth speaker first');
-    return libQ.resolve({ success: false, error: 'Find and select a Bluetooth speaker first' });
+    self._toast('error', 'Find and select a Bluetooth audio device first');
+    return libQ.resolve({ success: false, error: 'Find and select a Bluetooth audio device first' });
   }
   var previousId = String(self.config.get('preferredDeviceMac') || '').toUpperCase();
   var changingSpeaker = BluetoothAdapter.MAC_RE.test(previousId) && previousId !== id;
@@ -562,8 +620,8 @@ WirelessOutputManager.prototype.pairAndConnectDevice = function (data) {
   var targetName = selected && typeof selected === 'object' ? selected.label : '';
   targetName = String(targetName || id).replace(/\s+—.*$/, '').replace(/\s+\(audio\)$/, '');
   var successMessage = changingSpeaker
-    ? 'Speaker changed and connected. Music is on the default output; choose Play on Bluetooth speaker when ready.'
-    : 'Speaker paired, connected and saved';
+    ? 'Device changed and connected. Music is on the default output; choose Play through selected Bluetooth device when ready.'
+    : 'Bluetooth audio device selected and connected';
   var routeChanged = false;
   self.btLog.info('Pairing and connecting ' + id);
   return Promise.resolve().then(async function () {
@@ -578,7 +636,7 @@ WirelessOutputManager.prototype.pairAndConnectDevice = function (data) {
       var beforeConnect = await self.bluetooth.getDeviceInfo(id).catch(function () { return null; });
       if (!beforeConnect || !beforeConnect.connected) await self.bluetooth.connect(id);
       var info = await self.bluetooth.getDeviceInfo(id);
-      if (!info.connected) throw new Error('The selected speaker did not report a connected state');
+      if (!info.connected) throw new Error('The selected Bluetooth audio device did not report a connected state');
 
       var knownDevices = await self._loadKnownDevices().catch(function () { return self.devices; });
       var otherConnectedAudio = knownDevices.filter(function (device) {
@@ -608,13 +666,13 @@ WirelessOutputManager.prototype.pairAndConnectDevice = function (data) {
       if (changingSpeaker && routeChanged) {
         await self.bluetooth.disconnect(id).catch(function () {});
         await self.bluetooth.connect(previousId).catch(function (restoreError) {
-          self.btLog.warn('Unable to reconnect the previous speaker after a failed switch: ' + restoreError.message);
+          self.btLog.warn('Unable to reconnect the previous audio device after a failed switch: ' + restoreError.message);
         });
       }
       if (self.config.get('enabled') && self.config.get('autoReconnect')) self._scheduleReconnect(15000);
       var message = routeChanged
-        ? 'Could not finish switching to ' + targetName + '. The previous speaker remains selected and music is on the default output.'
-        : 'Could not connect to ' + targetName + '. Turn it on and try again. The current speaker and audio route were not changed.';
+        ? 'Could not finish switching to ' + targetName + '. The previous device remains selected and music is on the default output.'
+        : 'Could not connect to ' + targetName + '. Turn it on and try again. The current device and audio route were not changed.';
       self.lastError = message + ' ' + error.message;
       self.btLog.warn(self.lastError);
       self._toast('error', message);
@@ -687,7 +745,7 @@ WirelessOutputManager.prototype.connectDevice = function (data) {
     await self._loadKnownDevices().catch(function () {});
     await self.refreshUI();
     return result;
-  }, 'Bluetooth speaker connected');
+  }, 'Bluetooth audio device connected');
 };
 WirelessOutputManager.prototype.disconnectDevice = function (data) {
   var self = this; var id = self._selected(data);
@@ -696,7 +754,7 @@ WirelessOutputManager.prototype.disconnectDevice = function (data) {
     var result = await self.bluetooth.disconnect(id);
     await self.refreshUI();
     return result;
-  }, 'Speaker disconnected');
+  }, 'Bluetooth audio device disconnected');
 };
 WirelessOutputManager.prototype.forgetDevice = function (data) {
   var self = this;
@@ -730,7 +788,7 @@ WirelessOutputManager.prototype.forgetDevice = function (data) {
 
 WirelessOutputManager.prototype.resetSpeakerSetup = function () {
   var self = this;
-  return self._action('Resetting speaker setup', async function () {
+  return self._action('Resetting plugin setup', async function () {
     await self._returnToDefaultIfWireless();
     self._clearReconnect();
     self.config.set('preferredDeviceMac', '');
@@ -740,7 +798,7 @@ WirelessOutputManager.prototype.resetSpeakerSetup = function () {
     self.config.set('codecPreferences', '{}');
     self.devices = [];
     await self.refreshUI();
-  }, 'Speaker setup reset; system Bluetooth pairings were preserved');
+  }, 'Plugin setup reset; system Bluetooth pairings were preserved');
 };
 
 WirelessOutputManager.prototype.createBluetoothOutput = function () {
@@ -768,8 +826,8 @@ WirelessOutputManager.prototype.createBluetoothOutput = function () {
           });
           self.config.set('outputEnabled', false);
           var safetyError = new Error(rollbackSucceeded
-            ? 'Bluetooth device volume could not be made safe; routing returned to the default output. ' + error.message
-            : 'Bluetooth device volume and routing safety could not be verified. Playback remains stopped at 0% and muted. ' + error.message);
+            ? 'Bluetooth stream volume could not be made safe; routing returned to the default output. ' + error.message
+            : 'Bluetooth stream volume and routing safety could not be verified. Playback remains stopped at 0% and muted. ' + error.message);
           safetyError.keepSafeVolume = true;
           throw safetyError;
         }
@@ -780,11 +838,18 @@ WirelessOutputManager.prototype.createBluetoothOutput = function () {
     }).then(function (result) {
       return self.refreshUI().then(function () { return result; });
     });
-  }, 'Bluetooth output is ready at a safe device volume; press Play');
+  }, 'Bluetooth output is ready at 10% stream volume; press Play');
 };
 WirelessOutputManager.prototype.removeBluetoothOutput = function () {
   var self = this;
-  return self._action('Removing Bluetooth output', function () {
+  return self._action('Removing Bluetooth output', async function () {
+    var outputStatus = typeof self.outputManager.getStatus === 'function'
+      ? await self.outputManager.getStatus().catch(function () { return null; })
+      : null;
+    if (!self.config.get('outputEnabled') && outputStatus && !outputStatus.configured) {
+      await self.refreshUI();
+      return { alreadyDefault: true };
+    }
     return self._withPreservedSoftwareVolume(function () {
       return self._stopPlaybackForRouting().then(function () {
         return self.outputManager.removeOutput();
@@ -841,15 +906,15 @@ WirelessOutputManager.prototype.setBluetoothDeviceVolume = function (data) {
   var self = this;
   var requested;
   var deviceId = String(self.config.get('preferredDeviceMac') || '').toUpperCase();
-  return self._action('Setting selected Bluetooth device volume', async function () {
-    requested = self._submittedNumber(data, 'bluetoothDeviceVolume', 'Bluetooth device volume');
+  return self._action('Setting Bluetooth stream volume', async function () {
+    requested = self._submittedNumber(data, 'bluetoothDeviceVolume', 'Bluetooth stream volume');
     if (!BluetoothAdapter.MAC_RE.test(deviceId)) throw new Error('Choose a Bluetooth audio device first');
     var info = await self.bluetooth.getDeviceInfo(deviceId);
     if (!info.connected) throw new Error('Connect the selected Bluetooth device before changing its volume');
     var result = await self.bluetoothVolume.setVolume(deviceId, requested);
     await self.refreshUI();
     return result;
-  }, 'Bluetooth device volume updated');
+  }, 'Bluetooth stream volume updated');
 };
 
 WirelessOutputManager.prototype.setVolumioSoftwareVolume = function (data) {
@@ -889,7 +954,7 @@ WirelessOutputManager.prototype.saveVolumeSettings = function (data) {
 
     if (deviceInfo && deviceInfo.connected && data.bluetoothDeviceVolume !== undefined) {
       var bluetoothVolume = self._submittedNumber(
-        data, 'bluetoothDeviceVolume', 'Bluetooth device volume');
+        data, 'bluetoothDeviceVolume', 'Bluetooth stream volume');
       await self.bluetoothVolume.setVolume(deviceId, bluetoothVolume);
       changed.push('Bluetooth device');
     }
@@ -916,7 +981,7 @@ WirelessOutputManager.prototype.saveVolumeSettings = function (data) {
 
     if (!changed.length) {
       throw new Error(deviceInfo && !deviceInfo.connected
-        ? 'Connect the selected Bluetooth device before changing its device volume'
+        ? 'Connect the selected Bluetooth device before changing its stream volume'
         : 'No available volume setting was received');
     }
     await self.refreshUI();
