@@ -800,35 +800,65 @@ WirelessOutputManager.prototype.removeBluetoothOutput = function () {
   }, 'Music will play on the default audio output');
 };
 
+WirelessOutputManager.prototype._submittedNumber = function (data, field, label) {
+  function extract(value, depth) {
+    if (depth > 5 || value === null || value === undefined) return undefined;
+    if (typeof value === 'string' || typeof value === 'number') return value;
+
+    if (Array.isArray(value)) {
+      for (var index = 0; index < value.length; index += 1) {
+        var item = value[index];
+        if (item && typeof item === 'object' &&
+          (item.id === field || Object.prototype.hasOwnProperty.call(item, field))) {
+          var matched = extract(item.id === field ? item.value : item[field], depth + 1);
+          if (matched !== undefined) return matched;
+        }
+      }
+      return value.length === 1 ? extract(value[0], depth + 1) : undefined;
+    }
+
+    if (typeof value === 'object') {
+      if (Object.prototype.hasOwnProperty.call(value, field)) return extract(value[field], depth + 1);
+      if (value.id === field && Object.prototype.hasOwnProperty.call(value, 'value')) {
+        return extract(value.value, depth + 1);
+      }
+      if (Object.prototype.hasOwnProperty.call(value, 'value')) return extract(value.value, depth + 1);
+      if (Object.prototype.hasOwnProperty.call(value, 'data')) return extract(value.data, depth + 1);
+      var keys = Object.keys(value);
+      if (keys.length === 1) return extract(value[keys[0]], depth + 1);
+    }
+    return undefined;
+  }
+
+  var submitted = extract(data, 0);
+  var requested = Number(submitted);
+  if (submitted === '' || submitted === null || submitted === undefined ||
+    !Number.isFinite(requested) || requested < 0 || requested > 100) {
+    throw new Error(label + ' must be between 0 and 100');
+  }
+  return Math.round(requested);
+};
+
 WirelessOutputManager.prototype.setBluetoothDeviceVolume = function (data) {
   var self = this;
-  var submitted = data && data.bluetoothDeviceVolume !== undefined ? data.bluetoothDeviceVolume : data;
-  if (Array.isArray(submitted)) submitted = submitted[0];
-  if (submitted && typeof submitted === 'object') submitted = submitted.value;
-  var requested = Number(submitted);
+  var requested;
   var deviceId = String(self.config.get('preferredDeviceMac') || '').toUpperCase();
   return self._action('Setting selected Bluetooth device volume', async function () {
+    requested = self._submittedNumber(data, 'bluetoothDeviceVolume', 'Bluetooth device volume');
     if (!BluetoothAdapter.MAC_RE.test(deviceId)) throw new Error('Choose a Bluetooth audio device first');
     var info = await self.bluetooth.getDeviceInfo(deviceId);
     if (!info.connected) throw new Error('Connect the selected Bluetooth device before changing its volume');
     var result = await self.bluetoothVolume.setVolume(deviceId, requested);
     await self.refreshUI();
     return result;
-  }, 'Bluetooth device volume set to ' + Math.round(requested) + '%');
+  }, 'Bluetooth device volume updated');
 };
 
 WirelessOutputManager.prototype.setVolumioSoftwareVolume = function (data) {
   var self = this;
-  var submitted = data && data.volumioSoftwareVolume !== undefined ? data.volumioSoftwareVolume : data;
-  if (Array.isArray(submitted)) submitted = submitted[0];
-  if (submitted && typeof submitted === 'object') submitted = submitted.value;
-  var requested = Number(submitted);
+  var requested;
   return self._action('Setting Volumio software volume', async function () {
-    if (submitted === '' || submitted === null || submitted === undefined ||
-      !Number.isFinite(requested) || requested < 0 || requested > 100) {
-      throw new Error('Volumio software volume must be between 0 and 100');
-    }
-    requested = Math.round(requested);
+    requested = self._submittedNumber(data, 'volumioSoftwareVolume', 'Volumio software volume');
     var before = await self.volumioApi.getState();
     if (before.disableVolumeControl === true) {
       throw new Error('Volumio software volume is disabled. Change Mixer Type in Volumio Playback Options.');

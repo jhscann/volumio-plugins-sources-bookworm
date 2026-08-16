@@ -70,6 +70,28 @@ async function main() {
   assert.throws(function () { bluetoothVolume._parsePlaybackPercentages('no playback control'); },
     /did not report an A2DP playback volume/);
 
+  var volumePayloadPlugin = new WirelessOutputManager({ coreCommand: {}, logger: {}, configManager: {} });
+  assert.strictEqual(volumePayloadPlugin._submittedNumber(
+    { bluetoothDeviceVolume: { value: 20 } }, 'bluetoothDeviceVolume', 'Bluetooth device volume'), 20);
+  assert.strictEqual(volumePayloadPlugin._submittedNumber(
+    { bluetoothDeviceVolume: [{ value: { value: '21' } }] }, 'bluetoothDeviceVolume', 'Bluetooth device volume'), 21,
+  'nested Volumio number-input payloads must be decoded');
+  assert.strictEqual(volumePayloadPlugin._submittedNumber(
+    [{ id: 'volumioSoftwareVolume', value: '22' }], 'volumioSoftwareVolume', 'Volumio software volume'), 22,
+  'field-list payloads must be decoded by id');
+  assert.strictEqual(volumePayloadPlugin._submittedNumber(
+    { data: [{ id: 'bluetoothDeviceVolume', value: { value: 23 } }] },
+    'bluetoothDeviceVolume', 'Bluetooth device volume'), 23,
+  'wrapped field-list payloads must be decoded');
+  assert.throws(function () {
+    volumePayloadPlugin._submittedNumber({ value: { label: 'not a number' } },
+      'bluetoothDeviceVolume', 'Bluetooth device volume');
+  }, /between 0 and 100/);
+  assert.throws(function () {
+    volumePayloadPlugin._submittedNumber({ bluetoothDeviceVolume: { value: 101 } },
+      'bluetoothDeviceVolume', 'Bluetooth device volume');
+  }, /between 0 and 100/);
+
   var codecCommands = [];
   var codecSelected = 'SBC';
   var codecPcm = '/org/bluealsa/hci1/dev_34_0E_22_54_16_73/a2dpsrc/sink';
@@ -503,6 +525,25 @@ async function main() {
   assert.deepStrictEqual(routeCalls, ['stop', 'transport', 'codec', 'output', 'safety-cap', 'rollback']);
   assert.strictEqual(routeState.outputEnabled, false, 'failed device-volume safety must leave default routing active');
 
+  var uiDeviceVolume = null;
+  var deviceControlPlugin = new WirelessOutputManager({ coreCommand: {}, logger: {}, configManager: {} });
+  deviceControlPlugin.btLog = { info: function () {}, error: function () {} };
+  deviceControlPlugin._toast = function () {};
+  deviceControlPlugin.config = { get: function () { return '34:DF:2A:4F:74:F5'; } };
+  deviceControlPlugin.bluetooth = { getDeviceInfo: async function () { return { connected: true }; } };
+  deviceControlPlugin.bluetoothVolume = {
+    setVolume: async function (deviceId, value) {
+      assert.strictEqual(deviceId, '34:DF:2A:4F:74:F5');
+      uiDeviceVolume = value;
+      return { maximum: value };
+    }
+  };
+  deviceControlPlugin.refreshUI = async function () {};
+  await deviceControlPlugin.setBluetoothDeviceVolume({
+    bluetoothDeviceVolume: [{ value: { value: '20' } }]
+  });
+  assert.strictEqual(uiDeviceVolume, 20, 'Bluetooth UI handler must decode nested Volumio number payloads');
+
   var uiSoftwareVolume = 40;
   var softwareControlWrites = [];
   var softwareControlPlugin = new WirelessOutputManager({ coreCommand: {}, logger: {}, configManager: {} });
@@ -520,7 +561,7 @@ async function main() {
   var softwareRefreshes = 0;
   softwareControlPlugin.refreshUI = async function () { softwareRefreshes += 1; };
   var softwareControlResult = await softwareControlPlugin.setVolumioSoftwareVolume({
-    volumioSoftwareVolume: { value: 25 }
+    data: [{ id: 'volumioSoftwareVolume', value: { value: 25 } }]
   });
   assert.deepStrictEqual(softwareControlWrites, [25]);
   assert.strictEqual(softwareControlResult.actual, 23, 'software-volume control must accept small Bluetooth quantization');
