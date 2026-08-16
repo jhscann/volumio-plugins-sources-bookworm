@@ -123,6 +123,54 @@ WirelessOutputManager.prototype._stopPlaybackForRouting = function () {
   return new Promise(function (resolve) { setTimeout(resolve, 1000); });
 };
 
+WirelessOutputManager.prototype._captureSoftwareVolume = async function () {
+  var result = await this.runner.run('mpc', ['volume'], { timeoutMs: 5000, allowFailure: true });
+  if (result.exitCode !== 0) {
+    throw new Error('Unable to verify Volumio volume before changing audio routing; no routing change was made.');
+  }
+  var match = String(result.stdout || '').match(/volume:\s*(\d+)%/i);
+  if (!match) {
+    if (/volume:\s*n\/a/i.test(String(result.stdout || ''))) return null; // Hardware mixer needs no restoration.
+    throw new Error('Volumio returned an unrecognized volume state; no routing change was made.');
+  }
+  var volume = Number(match[1]);
+  if (volume < 0 || volume > 100) {
+    throw new Error('Volumio returned an unsafe volume value; no routing change was made.');
+  }
+  return volume;
+};
+
+WirelessOutputManager.prototype._restoreSoftwareVolume = async function (volume) {
+  if (volume === null || volume === undefined) return;
+  var setResult = await this.runner.run('mpc', ['volume', String(volume)], { timeoutMs: 5000, allowFailure: true });
+  if (setResult.exitCode !== 0) {
+    throw new Error('Volumio software volume could not be restored; playback remains stopped. Set the volume manually before pressing Play.');
+  }
+  var verify = await this.runner.run('mpc', ['volume'], { timeoutMs: 5000, allowFailure: true });
+  var match = verify.exitCode === 0 && String(verify.stdout || '').match(/volume:\s*(\d+)%/i);
+  if (!match || Number(match[1]) !== volume) {
+    throw new Error('Volumio software volume could not be verified after routing changed; playback remains stopped. Set the volume manually before pressing Play.');
+  }
+  this.log.info('Restored Volumio software volume to ' + volume + '% after changing audio routing');
+};
+
+WirelessOutputManager.prototype._withPreservedSoftwareVolume = async function (operation) {
+  var volume = await this._captureSoftwareVolume();
+  var result;
+  try {
+    result = await operation();
+  } catch (operationError) {
+    try {
+      await this._restoreSoftwareVolume(volume);
+    } catch (volumeError) {
+      throw new Error(operationError.message + ' Volume restoration also failed: ' + volumeError.message);
+    }
+    throw operationError;
+  }
+  await this._restoreSoftwareVolume(volume);
+  return result;
+};
+
 WirelessOutputManager.prototype._ensureBluetoothAudioTransport = function (deviceId) {
   var self = this;
   var mac = String(deviceId || '').toUpperCase();
@@ -166,10 +214,13 @@ WirelessOutputManager.prototype._ensureBluetoothAudioTransport = function (devic
 };
 
 WirelessOutputManager.prototype._returnToDefaultIfWireless = async function () {
-  if (!this.config.get('outputEnabled')) return;
-  await this._stopPlaybackForRouting();
-  await this.outputManager.removeOutput();
-  this.config.set('outputEnabled', false);
+  var self = this;
+  if (!self.config.get('outputEnabled')) return;
+  await self._withPreservedSoftwareVolume(async function () {
+    await self._stopPlaybackForRouting();
+    await self.outputManager.removeOutput();
+    self.config.set('outputEnabled', false);
+  });
 };
 
 WirelessOutputManager.prototype._scheduleReconnect = function (delayMs) {
@@ -361,7 +412,7 @@ WirelessOutputManager.prototype.getUIConfig = function () {
     else {
       codecDescription = 'Saved for ' + preferredName + ': ' + preferredCodecName + '. Active: ' + (codecStatus.activeCodec ? self.codecManager.displayName(codecStatus.activeCodec) : 'unknown') +
         '. Available: ' + (codecStatus.availableCodecs.map(function (codec) { return self.codecManager.displayName(codec); }).join(', ') || 'none reported') +
-        '. Automatic chooses LDAC, aptX HD, AAC, aptX, then SBC. The choice is applied when you select Play on Bluetooth speaker.';
+        '. Automatic chooses LDAC, aptX HD, AAC, aptX, then SBC. The choice is applied when you select Play on Bluetooth speaker. Software mixer volume is preserved while routing changes.';
       if (codecStatus.systemCodecs.indexOf('AAC') === -1) codecDescription += ' AAC is not available in the installed BlueALSA build.';
     }
     set('sections[3].content[2]', 'description', codecDescription);
@@ -589,29 +640,33 @@ WirelessOutputManager.prototype.resetSpeakerSetup = function () {
 WirelessOutputManager.prototype.createBluetoothOutput = function () {
   var self = this;
   return self._action('Creating guarded BlueALSA output', function () {
-    return self._stopPlaybackForRouting().then(function () {
-      return self._ensureBluetoothAudioTransport(self.config.get('preferredDeviceMac'));
-    }).then(function () {
-      return self.codecManager.select(
-        self.config.get('preferredDeviceMac'),
-        self._preferredCodecFor(self.config.get('preferredDeviceMac'))
-      );
-    }).then(function () {
-      return self.outputManager.createOutput(self.config.get('preferredDeviceMac'));
-    }).then(function (result) {
-      self.config.set('outputEnabled', true);
-      return self.refreshUI().then(function () { return result; });
+    return self._withPreservedSoftwareVolume(function () {
+      return self._stopPlaybackForRouting().then(function () {
+        return self._ensureBluetoothAudioTransport(self.config.get('preferredDeviceMac'));
+      }).then(function () {
+        return self.codecManager.select(
+          self.config.get('preferredDeviceMac'),
+          self._preferredCodecFor(self.config.get('preferredDeviceMac'))
+        );
+      }).then(function () {
+        return self.outputManager.createOutput(self.config.get('preferredDeviceMac'));
+      }).then(function (result) {
+        self.config.set('outputEnabled', true);
+        return self.refreshUI().then(function () { return result; });
+      });
     });
   }, 'Music will play on the Bluetooth speaker');
 };
 WirelessOutputManager.prototype.removeBluetoothOutput = function () {
   var self = this;
   return self._action('Removing Bluetooth output', function () {
-    return self._stopPlaybackForRouting().then(function () {
-      return self.outputManager.removeOutput();
-    }).then(function (result) {
-      self.config.set('outputEnabled', false);
-      return self.refreshUI().then(function () { return result; });
+    return self._withPreservedSoftwareVolume(function () {
+      return self._stopPlaybackForRouting().then(function () {
+        return self.outputManager.removeOutput();
+      }).then(function (result) {
+        self.config.set('outputEnabled', false);
+        return self.refreshUI().then(function () { return result; });
+      });
     });
   }, 'Music will play on the default audio output');
 };

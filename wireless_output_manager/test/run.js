@@ -270,6 +270,49 @@ async function main() {
   assert.strictEqual(stopCalls, 1, 'manual route switch must stop playback');
   assert(Date.now() - started >= 900, 'manual route switch must allow MPD to release the PCM');
 
+  var softwareVolume = 27;
+  var volumeSetCalls = [];
+  var volumePlugin = new WirelessOutputManager({ coreCommand: {}, logger: {}, configManager: {} });
+  volumePlugin.log = { info: function () {}, warn: function () {} };
+  volumePlugin.runner = { run: async function (command, args) {
+    assert.strictEqual(command, 'mpc');
+    if (args.length === 1) return { stdout: 'volume: ' + softwareVolume + '%   repeat: off\n', stderr: '', exitCode: 0 };
+    volumeSetCalls.push(args[1]);
+    softwareVolume = Number(args[1]);
+    return { stdout: 'volume: ' + softwareVolume + '%\n', stderr: '', exitCode: 0 };
+  } };
+  await volumePlugin._withPreservedSoftwareVolume(async function () {
+    softwareVolume = 100; // Simulate MPD resetting its software mixer during the ALSA rebuild.
+  });
+  assert.strictEqual(softwareVolume, 27, 'manual routing must restore the previous software volume');
+  assert.deepStrictEqual(volumeSetCalls, ['27'], 'software volume must be restored exactly once');
+
+  var hardwareSetCalls = 0;
+  volumePlugin.runner = { run: async function (command, args) {
+    if (args.length === 1) return { stdout: 'volume: n/a\n', stderr: '', exitCode: 0 };
+    hardwareSetCalls += 1;
+    return { stdout: '', stderr: '', exitCode: 0 };
+  } };
+  await volumePlugin._withPreservedSoftwareVolume(async function () {});
+  assert.strictEqual(hardwareSetCalls, 0, 'hardware mixer mode must not trigger a software-volume write');
+
+  var unsafeOperationRan = false;
+  volumePlugin.runner = { run: async function () {
+    return { stdout: '', stderr: 'MPD unavailable', exitCode: 1 };
+  } };
+  await assert.rejects(volumePlugin._withPreservedSoftwareVolume(async function () { unsafeOperationRan = true; }),
+    /no routing change was made/,
+    'routing must not start when the current volume cannot be determined');
+  assert.strictEqual(unsafeOperationRan, false, 'an unreadable volume must stop the routing operation before it starts');
+
+  volumePlugin.runner = { run: async function (command, args) {
+    if (args.length === 1) return { stdout: 'volume: 32%\n', stderr: '', exitCode: 0 };
+    return { stdout: '', stderr: 'setvol failed', exitCode: 1 };
+  } };
+  await assert.rejects(volumePlugin._withPreservedSoftwareVolume(async function () {}),
+    /playback remains stopped/,
+    'a failed software-volume restoration must produce a clear safety error');
+
   var recoveryMac = '34:09:C9:B0:39:B6';
   var recoveryCalls = [];
   var recoveryChecks = 0;
@@ -446,6 +489,7 @@ async function main() {
   var removedOutput = false;
   onboardingSaved.outputEnabled = true;
   plugin._stopPlaybackForRouting = function () { return Promise.resolve(); };
+  plugin._withPreservedSoftwareVolume = function (operation) { return Promise.resolve().then(operation); };
   plugin.outputManager = { removeOutput: async function () { removedOutput = true; } };
   await plugin._returnToDefaultIfWireless();
   assert.strictEqual(removedOutput, true, 'speaker removal must return active wireless routing to default');
