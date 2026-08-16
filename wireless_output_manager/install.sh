@@ -24,11 +24,33 @@ fi
 if command -v bluealsa >/dev/null 2>&1; then
   echo "[$PLUGIN_NAME] Existing BlueALSA sender detected; guarded ALSA output can be enabled after diagnostics"
 
-  if bluealsa --help 2>&1 | grep -Eq 'a2dp-source:.*LDAC'; then
-    if bluealsa-cli status 2>/dev/null | grep -Eq 'A2DP-source[[:space:]]*:.*LDAC'; then
-      echo "[$PLUGIN_NAME] BlueALSA LDAC sender support is already active; no service change was needed"
+  bluealsa_help="$(bluealsa --help 2>&1 || true)"
+  available_source_codecs="$(printf '%s\n' "$bluealsa_help" | sed -n 's/^[[:space:]]*a2dp-source:[[:space:]]*//p' | head -n 1 | tr ',' ' ')"
+  codec_flags=""
+  codec_names=""
+  for codec_name in LDAC aptX-HD aptX; do
+    case " $available_source_codecs " in
+      *" $codec_name "*)
+        codec_flags="$codec_flags -c $codec_name"
+        codec_names="$codec_names $codec_name"
+        ;;
+    esac
+  done
+
+  if [ -n "$codec_flags" ]; then
+    active_codecs="$(bluealsa-cli status 2>/dev/null | sed -n 's/^[[:space:]]*A2DP-source[[:space:]]*:[[:space:]]*//p' | head -n 1)"
+    codecs_ready=1
+    for codec_name in $codec_names; do
+      case " $active_codecs " in
+        *" $codec_name "*) ;;
+        *) codecs_ready=0 ;;
+      esac
+    done
+
+    if [ "$codecs_ready" -eq 1 ]; then
+      echo "[$PLUGIN_NAME] BlueALSA optional sender codecs are already active:$codec_names; no service change was needed"
     elif [ -f "$BLUEALSA_OVERRIDE" ] && ! grep -q 'Managed by Wireless Output Manager' "$BLUEALSA_OVERRIDE"; then
-      echo "[$PLUGIN_NAME] The codec override path is owned by another configuration; LDAC was not enabled"
+      echo "[$PLUGIN_NAME] The codec override path is owned by another configuration; optional codecs were not enabled"
     else
       override_backup=""
       if [ -f "$BLUEALSA_OVERRIDE" ]; then
@@ -42,10 +64,10 @@ if command -v bluealsa >/dev/null 2>&1; then
         */bluealsa*)
           override_temp="$(mktemp)"
           {
-            echo '# Managed by Wireless Output Manager. Adds an available codec; preserves the existing BlueALSA command.'
+            echo '# Managed by Wireless Output Manager. Adds available codecs; preserves the existing BlueALSA command.'
             echo '[Service]'
             echo 'ExecStart='
-            printf 'ExecStart=%s -c LDAC\n' "$bluealsa_exec"
+            printf 'ExecStart=%s%s\n' "$bluealsa_exec" "$codec_flags"
           } > "$override_temp"
           mkdir -p "$BLUEALSA_OVERRIDE_DIR"
           install -m 0644 "$override_temp" "$BLUEALSA_OVERRIDE"
@@ -53,23 +75,30 @@ if command -v bluealsa >/dev/null 2>&1; then
 
           systemctl daemon-reload
           if systemctl restart bluealsa; then
-            ldac_ready=0
+            codecs_ready=0
             for attempt in 1 2 3 4 5; do
-              if bluealsa-cli status 2>/dev/null | grep -Eq 'A2DP-source[[:space:]]*:.*LDAC'; then
-                ldac_ready=1
+              active_codecs="$(bluealsa-cli status 2>/dev/null | sed -n 's/^[[:space:]]*A2DP-source[[:space:]]*:[[:space:]]*//p' | head -n 1)"
+              codecs_ready=1
+              for codec_name in $codec_names; do
+                case " $active_codecs " in
+                  *" $codec_name "*) ;;
+                  *) codecs_ready=0 ;;
+                esac
+              done
+              if [ "$codecs_ready" -eq 1 ]; then
                 break
               fi
               sleep 1
             done
           else
-            ldac_ready=0
+            codecs_ready=0
           fi
 
-          if [ "$ldac_ready" -eq 1 ]; then
-            echo "[$PLUGIN_NAME] Enabled and verified BlueALSA LDAC sender support; SBC remains available"
+          if [ "$codecs_ready" -eq 1 ]; then
+            echo "[$PLUGIN_NAME] Enabled and verified BlueALSA optional sender codecs:$codec_names; SBC remains available"
             [ -n "$override_backup" ] && rm -f "$override_backup"
           else
-            echo "[$PLUGIN_NAME] LDAC service verification failed; restoring the previous BlueALSA configuration"
+            echo "[$PLUGIN_NAME] Optional codec service verification failed; restoring the previous BlueALSA configuration"
             if [ -n "$override_backup" ]; then
               install -m 0644 "$override_backup" "$BLUEALSA_OVERRIDE"
               rm -f "$override_backup"
@@ -81,7 +110,7 @@ if command -v bluealsa >/dev/null 2>&1; then
           fi
           ;;
         *)
-          echo "[$PLUGIN_NAME] Could not safely determine the existing BlueALSA service command; LDAC was not enabled"
+          echo "[$PLUGIN_NAME] Could not safely determine the existing BlueALSA service command; optional codecs were not enabled"
           if [ -n "$override_backup" ]; then
             install -m 0644 "$override_backup" "$BLUEALSA_OVERRIDE"
             rm -f "$override_backup"
@@ -91,7 +120,7 @@ if command -v bluealsa >/dev/null 2>&1; then
       esac
     fi
   else
-    echo "[$PLUGIN_NAME] Installed BlueALSA build does not provide LDAC sender support; service was not changed"
+    echo "[$PLUGIN_NAME] Installed BlueALSA build does not provide LDAC, aptX or aptX HD sender support; service was not changed"
   fi
 elif command -v pactl >/dev/null 2>&1 || command -v pw-cli >/dev/null 2>&1; then
   echo "[$PLUGIN_NAME] PulseAudio or PipeWire detected; control and diagnostics are available, but automatic audio routing is not enabled"

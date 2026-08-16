@@ -314,12 +314,14 @@ WirelessOutputManager.prototype.getUIConfig = function () {
     }) : { available: false, systemCodecs: [], availableCodecs: [], activeCodec: '' };
     var visibleCodecs = connected ? codecStatus.availableCodecs : codecStatus.systemCodecs;
     var codecOptions = [{ value: 'AUTO', label: 'Automatic — best available' }];
-    ['LDAC', 'AAC', 'SBC'].forEach(function (codec) {
+    ['LDAC', 'APTX-HD', 'AAC', 'APTX', 'SBC'].forEach(function (codec) {
       if (visibleCodecs.indexOf(codec) !== -1 || preferredCodec === codec) {
         codecOptions.push({
           value: codec,
           label: codec === 'LDAC' ? 'LDAC — highest available quality' :
-            (codec === 'SBC' ? 'SBC — maximum compatibility' : 'AAC')
+            (codec === 'APTX-HD' ? 'aptX HD — high quality' :
+              (codec === 'APTX' ? 'aptX' :
+                (codec === 'SBC' ? 'SBC — maximum compatibility' : 'AAC')))
         });
       }
     });
@@ -353,12 +355,13 @@ WirelessOutputManager.prototype.getUIConfig = function () {
     set('sections[2].content[2]', 'hidden', pairedAudio.length === 0);
     set('sections[2].content[3]', 'hidden', !preferred);
     var codecDescription;
+    var preferredCodecName = self.codecManager.displayName(preferredCodec);
     if (!preferred) codecDescription = 'Choose a speaker before selecting a Bluetooth audio codec.';
-    else if (!connected) codecDescription = 'Saved for ' + preferredName + ': ' + preferredCodec + '. Connect the Bluetooth audio device to see the codecs it shares with Volumio.';
+    else if (!connected) codecDescription = 'Saved for ' + preferredName + ': ' + preferredCodecName + '. Connect the Bluetooth audio device to see the codecs it shares with Volumio.';
     else {
-      codecDescription = 'Saved for ' + preferredName + ': ' + preferredCodec + '. Active: ' + (codecStatus.activeCodec || 'unknown') +
-        '. Available: ' + (codecStatus.availableCodecs.join(', ') || 'none reported') +
-        '. Automatic chooses LDAC, then AAC, then SBC. The choice is applied when you select Play on Bluetooth speaker.';
+      codecDescription = 'Saved for ' + preferredName + ': ' + preferredCodecName + '. Active: ' + (codecStatus.activeCodec ? self.codecManager.displayName(codecStatus.activeCodec) : 'unknown') +
+        '. Available: ' + (codecStatus.availableCodecs.map(function (codec) { return self.codecManager.displayName(codec); }).join(', ') || 'none reported') +
+        '. Automatic chooses LDAC, aptX HD, AAC, aptX, then SBC. The choice is applied when you select Play on Bluetooth speaker.';
       if (codecStatus.systemCodecs.indexOf('AAC') === -1) codecDescription += ' AAC is not available in the installed BlueALSA build.';
     }
     set('sections[3].content[2]', 'description', codecDescription);

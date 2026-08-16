@@ -14,7 +14,7 @@ The current version has been tested on:
 - manual switching between the JBL speaker and an iFi USB DAC;
 - reconnect, plugin-only reset, reinstall and uninstall workflows.
 
-Other Volumio 4 devices, Bluetooth speakers and audio configurations remain untested. The plugin deliberately does not install or replace the system audio stack. LDAC support is currently undergoing real-device testing with Soundcore P31i earbuds.
+Other Volumio 4 devices, Bluetooth speakers and audio configurations remain untested. The plugin deliberately does not install or replace the system audio stack. LDAC has been validated with Soundcore P31i earbuds; aptX and aptX HD support remain experimental pending real-device testing.
 
 ## What works
 
@@ -29,10 +29,10 @@ Other Volumio 4 devices, Bluetooth speakers and audio configurations remain unte
 - conservative uninstall behavior that preserves pairings, packages and MPD configuration.
 - runtime resolution of a paired speaker's owning Bluetooth controller, including systems where `hci0` and `hci1` change across reboots.
 - automatic or explicit per-device codec selection for speakers, headphones and earbuds, using codecs shared by BlueALSA and the connected device;
-- guarded LDAC enablement when the installed BlueALSA build already contains an LDAC encoder.
+- guarded LDAC, aptX and aptX HD enablement when the installed BlueALSA build already contains the corresponding encoders.
 - one bounded, selected-device reconnect when BlueZ reports a connection but BlueALSA has no usable audio stream, such as immediately after the codec service is restarted;
 
-The plugin does **not** install or replace BlueALSA, PulseAudio or PipeWire and does **not** edit `/etc/mpd.conf` directly. On a compatible BlueALSA installation it adds one plugin-owned systemd drop-in that enables the already-installed LDAC codec. The existing service command and profiles are preserved, the result is verified, and a failed change is rolled back.
+The plugin does **not** install or replace BlueALSA, PulseAudio or PipeWire and does **not** edit `/etc/mpd.conf` directly. On a compatible BlueALSA installation it adds one plugin-owned systemd drop-in that enables the already-installed LDAC, aptX and aptX HD codecs. The existing service command and profiles are preserved, the result is verified, and a failed change is rolled back.
 
 ## Important limitations
 
@@ -43,7 +43,7 @@ The plugin does **not** install or replace BlueALSA, PulseAudio or PipeWire and 
 - Pairing that requires a PIN or confirmation agent may need to be completed with `bluetoothctl` over SSH.
 - On systems with multiple Bluetooth controllers, reconnect, disconnect, trust and forget operations target the BlueZ device object that owns the pairing. Controller indexes such as `hci0` are deliberately not saved because Linux may renumber them after reboot. User-initiated discovery still follows the controller selected by BlueZ, so advanced first-time pairing arrangements may require selecting the intended controller in `bluetoothctl`.
 - With Volumio **Mixer Type** set to **Hardware**, Bluetooth is effectively sent at 100%; Volumio's volume control continues to apply to the physical DAC instead. Use **Software** mixer mode if you want Volumio to control Bluetooth playback volume.
-- Codec support depends on both the connected device and the BlueALSA build supplied by the system. The tested Volumio 4 build contains LDAC but was not compiled with AAC, so this plugin cannot offer AAC without replacing system audio packages. It intentionally does not do that.
+- Codec support depends on both the connected device and the BlueALSA build supplied by the system. The tested Volumio 4 build contains LDAC, aptX and aptX HD but was not compiled with AAC, so this plugin cannot offer AAC without replacing system audio packages. It intentionally does not do that. aptX Adaptive is not provided by BlueALSA 4.3.1 and is not supported by this plugin; compatible headphones may instead offer standard aptX or aptX HD fallback.
 
 ## Install from the forum preview branch
 
@@ -60,7 +60,7 @@ volumio plugin install
 
 Confirm the warning for manually installed, unverified plugins. After installation, open **Plugins**, enable **Wireless Output Manager**, then open its settings page.
 
-During installation, a compatible BlueALSA service is restarted once to enable its existing LDAC encoder. Bluetooth devices may disconnect briefly and can then be reconnected normally. SBC remains available. If LDAC cannot be verified, the installer restores the previous service configuration and the plugin continues with the codecs already provided by the system.
+During installation, a compatible BlueALSA service is restarted once to enable its existing LDAC, aptX and aptX HD encoders. Only codecs present in the installed BlueALSA build are enabled. Bluetooth devices may disconnect briefly and can then be reconnected normally. SBC remains available. If the requested codecs cannot be verified, the installer restores the previous service configuration and the plugin continues with the codecs already provided by the system.
 
 If BlueZ retains a stale connected state after that restart but no Bluetooth audio stream exists, the first **Play on Bluetooth speaker** request performs one bounded reconnect of the selected device on its owning adapter. It does not restart Bluetooth, change the default adapter or touch unrelated devices.
 
@@ -117,11 +117,11 @@ To return to the output already selected in Volumio Playback Options, choose **P
 
 The codec preference is saved separately for each Bluetooth audio device, including speakers, headphones and earbuds. Connect the device, then open **Preferences → Bluetooth audio codec**:
 
-- **Automatic — best available** chooses LDAC first, then AAC, then SBC from the codecs mutually reported for that connection;
-- choosing **LDAC**, **AAC** or **SBC** explicitly requires that codec and fails clearly rather than silently falling back;
+- **Automatic — best available** chooses LDAC first, then aptX HD, AAC, aptX and SBC from the codecs mutually reported for that connection;
+- choosing **LDAC**, **aptX HD**, **AAC**, **aptX** or **SBC** explicitly requires that codec and fails clearly rather than silently falling back;
 - the selected codec is applied and verified when you choose **Play on Bluetooth speaker**.
 
-Only codecs reported by the current connection are offered in the selector. Some headphones require their high-quality codec mode to be enabled in the manufacturer's app before they advertise LDAC. LDAC can consume more battery and may be less stable in a congested 2.4 GHz environment; select SBC if reliability is more important than bitrate.
+Only codecs reported by the current connection are offered in the selector. Some headphones require their high-quality codec mode to be enabled in the manufacturer's app before they advertise LDAC. LDAC can consume more battery and may be less stable in a congested 2.4 GHz environment; select SBC if reliability is more important than bitrate. aptX Adaptive itself is not available, although an aptX Adaptive device may expose standard aptX or aptX HD as a backward-compatible connection.
 
 To use a different speaker, repeat the search, selection and **Use selected speaker** workflow. The plugin returns active Bluetooth routing to the default output, disconnects every other connected device that BlueZ confirms is an audio speaker, and connects the newly selected speaker. All pairings are preserved, and confirmed non-audio Bluetooth devices are not touched. The existing saved speaker is replaced only after the new speaker connects successfully. Choose **Play on Bluetooth speaker** afterward when you are ready to route music to it.
 

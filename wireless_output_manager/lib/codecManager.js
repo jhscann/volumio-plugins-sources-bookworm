@@ -1,8 +1,23 @@
 'use strict';
 
 var MAC_RE = require('./adapters/bluetooth').MAC_RE;
-var USER_CODECS = ['SBC', 'AAC', 'LDAC'];
-var AUTO_PRIORITY = ['LDAC', 'AAC', 'SBC'];
+var USER_CODECS = ['SBC', 'AAC', 'APTX', 'APTX-HD', 'LDAC'];
+var AUTO_PRIORITY = ['LDAC', 'APTX-HD', 'AAC', 'APTX', 'SBC'];
+var BLUEALSA_CODEC_NAMES = {
+  SBC: 'SBC',
+  AAC: 'AAC',
+  APTX: 'aptX',
+  'APTX-HD': 'aptX-HD',
+  LDAC: 'LDAC'
+};
+var DISPLAY_NAMES = {
+  AUTO: 'Automatic',
+  SBC: 'SBC',
+  AAC: 'AAC',
+  APTX: 'aptX',
+  'APTX-HD': 'aptX HD',
+  LDAC: 'LDAC'
+};
 
 function CodecManager(options) {
   this.runner = options.runner;
@@ -15,6 +30,11 @@ CodecManager.prototype.normalize = function (value) {
   if (codec === 'AUTO') return 'AUTO';
   if (USER_CODECS.indexOf(codec) === -1) throw new Error('Unsupported codec preference: ' + codec);
   return codec;
+};
+
+CodecManager.prototype.displayName = function (value) {
+  var codec = String(value || '').trim().toUpperCase();
+  return DISPLAY_NAMES[codec] || String(value || '').trim() || 'unknown';
 };
 
 CodecManager.prototype._mac = function (value) {
@@ -101,21 +121,22 @@ CodecManager.prototype.select = function (deviceId, preference) {
       });
       if (!selectedCodec) throw new Error('No mutually supported Bluetooth audio codec was reported');
     }
+    var selectedCodecName = self.displayName(selectedCodec);
     if (before.systemCodecs.indexOf(selectedCodec) === -1) {
-      throw new Error(selectedCodec + ' is not enabled by the installed BlueALSA service');
+      throw new Error(selectedCodecName + ' is not enabled by the installed BlueALSA service');
     }
     if (before.availableCodecs.indexOf(selectedCodec) === -1) {
-      throw new Error(selectedCodec + ' is not offered by both BlueALSA and the selected Bluetooth device');
+      throw new Error(selectedCodecName + ' is not offered by both BlueALSA and the selected Bluetooth device');
     }
     if (before.activeCodec !== selectedCodec) {
-      await self.runner.run('bluealsa-cli', ['codec', before.pcmPath, selectedCodec], { timeoutMs: 20000 });
+      await self.runner.run('bluealsa-cli', ['codec', before.pcmPath, BLUEALSA_CODEC_NAMES[selectedCodec]], { timeoutMs: 20000 });
     }
     var after = await self.getStatus(mac);
     if (after.activeCodec !== selectedCodec) {
-      throw new Error('BlueALSA did not confirm the requested ' + selectedCodec + ' codec');
+      throw new Error('BlueALSA did not confirm the requested ' + selectedCodecName + ' codec');
     }
     after.preference = codec;
-    self.logger.info('Selected ' + selectedCodec + ' for ' + mac + ' using ' + after.pcmPath +
+    self.logger.info('Selected ' + selectedCodecName + ' for ' + mac + ' using ' + after.pcmPath +
       (codec === 'AUTO' ? ' (automatic best available)' : ''));
     return after;
   }).finally(function () { delete self.selections[mac]; });

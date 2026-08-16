@@ -32,10 +32,10 @@ async function main() {
   var codecManager = new CodecManager({
     runner: { run: async function (command, args) {
       codecCommands.push({ command: command, args: args });
-      if (args[0] === 'status') return { stdout: 'Profiles:\n  A2DP-source : SBC AAC LDAC\n', exitCode: 0 };
+      if (args[0] === 'status') return { stdout: 'Profiles:\n  A2DP-source : SBC AAC aptX aptX-HD LDAC\n', exitCode: 0 };
       if (args[0] === 'list-pcms') return { stdout: codecPcm + '\n', exitCode: 0 };
       if (args[0] === 'info') return {
-        stdout: 'Available codecs: SBC AAC LDAC\nSelected codec: ' + codecSelected + '\n', exitCode: 0
+        stdout: 'Available codecs: SBC AAC aptX aptX-HD LDAC\nSelected codec: ' + codecSelected + '\n', exitCode: 0
       };
       if (args[0] === 'codec') {
         codecSelected = args[2];
@@ -47,9 +47,12 @@ async function main() {
   });
   var codecStatus = await codecManager.getStatus('34:0E:22:54:16:73');
   assert.strictEqual(codecStatus.pcmPath, codecPcm, 'codec lookup must resolve the current hci path by MAC');
-  assert.deepStrictEqual(codecStatus.systemCodecs, ['SBC', 'AAC', 'LDAC']);
-  assert.deepStrictEqual(codecStatus.availableCodecs, ['SBC', 'AAC', 'LDAC']);
+  assert.deepStrictEqual(codecStatus.systemCodecs, ['SBC', 'AAC', 'APTX', 'APTX-HD', 'LDAC']);
+  assert.deepStrictEqual(codecStatus.availableCodecs, ['SBC', 'AAC', 'APTX', 'APTX-HD', 'LDAC']);
   assert.strictEqual(codecStatus.activeCodec, 'SBC');
+  assert.strictEqual(codecManager.normalize('aptX'), 'APTX');
+  assert.strictEqual(codecManager.normalize('aptX-HD'), 'APTX-HD');
+  assert.strictEqual(codecManager.displayName('APTX-HD'), 'aptX HD');
   await codecManager.select('34:0E:22:54:16:73', 'ldac');
   assert.strictEqual(codecSelected, 'LDAC', 'explicit codec selection must be verified after applying it');
   assert(codecCommands.some(function (call) {
@@ -58,11 +61,41 @@ async function main() {
 
   codecSelected = 'SBC';
   codecCommands = [];
+  await codecManager.select('34:0E:22:54:16:73', 'aptX-HD');
+  assert.strictEqual(codecSelected, 'aptX-HD', 'aptX HD must use BlueALSA\'s exact mixed-case codec name');
+  assert(codecCommands.some(function (call) {
+    return call.args[0] === 'codec' && call.args[2] === 'aptX-HD';
+  }), 'aptX HD selection must be sent using the BlueALSA codec spelling');
+
+  codecSelected = 'SBC';
+  codecCommands = [];
+  await codecManager.select('34:0E:22:54:16:73', 'aptX');
+  assert.strictEqual(codecSelected, 'aptX', 'standard aptX must use BlueALSA\'s exact mixed-case codec name');
+
+  codecSelected = 'SBC';
+  codecCommands = [];
   await codecManager.select('34:0E:22:54:16:73', 'auto');
   assert.strictEqual(codecSelected, 'LDAC', 'automatic codec mode must choose the best mutually available codec');
   assert(codecCommands.some(function (call) {
     return call.args[0] === 'codec' && call.args[2] === 'LDAC';
   }), 'automatic codec mode must explicitly select and verify LDAC when available');
+
+  var aptxSelected = 'SBC';
+  var aptxAutoManager = new CodecManager({
+    runner: { run: async function (command, args) {
+      if (args[0] === 'status') return { stdout: 'Profiles:\n  A2DP-source : SBC aptX aptX-HD\n', exitCode: 0 };
+      if (args[0] === 'list-pcms') return { stdout: codecPcm + '\n', exitCode: 0 };
+      if (args[0] === 'info') return { stdout: 'Available codecs: SBC aptX aptX-HD\nSelected codec: ' + aptxSelected + '\n', exitCode: 0 };
+      if (args[0] === 'codec') {
+        aptxSelected = args[2];
+        return { stdout: '', exitCode: 0 };
+      }
+      throw new Error('Unexpected aptX codec command');
+    } },
+    logger: { info: function () {} }
+  });
+  await aptxAutoManager.select('34:0E:22:54:16:73', 'AUTO');
+  assert.strictEqual(aptxSelected, 'aptX-HD', 'automatic mode must prefer aptX HD when LDAC is unavailable');
 
   var unavailableCodecManager = new CodecManager({
     runner: { run: async function (command, args) {
@@ -483,8 +516,9 @@ async function main() {
   plugin.config = { get: function (key) { return uiValues[key]; } };
   plugin.codecManager = {
     normalize: function (value) { return value || 'AUTO'; },
+    displayName: function (value) { return value === 'APTX-HD' ? 'aptX HD' : (value === 'APTX' ? 'aptX' : (value || 'unknown')); },
     getStatus: async function () {
-      return { available: true, systemCodecs: ['SBC', 'LDAC'], availableCodecs: ['SBC', 'LDAC'], activeCodec: 'SBC' };
+      return { available: true, systemCodecs: ['SBC', 'APTX', 'APTX-HD', 'LDAC'], availableCodecs: ['SBC', 'APTX', 'APTX-HD', 'LDAC'], activeCodec: 'APTX-HD' };
     }
   };
   plugin.bluetooth = { getStatus: async function () { return { preferred: { paired: true, connected: true } }; } };
@@ -494,6 +528,12 @@ async function main() {
   assert.strictEqual(uiWrites['sections[1].content[0].hidden'], false, 'wireless destination must appear for a connected speaker');
   assert.strictEqual(uiWrites['sections[2].content[0].hidden'], true, 'reconnect must hide while connected');
   assert.strictEqual(uiWrites['sections[2].content[1].hidden'], false, 'disconnect must show while connected');
+  assert(uiWrites['sections[3].content[2].options'].some(function (option) {
+    return option.value === 'APTX' && option.label === 'aptX';
+  }), 'codec selector must expose standard aptX with a human-readable label');
+  assert(uiWrites['sections[3].content[2].options'].some(function (option) {
+    return option.value === 'APTX-HD' && option.label === 'aptX HD — high quality';
+  }), 'codec selector must expose aptX HD with a human-readable label');
 
   uiWrites = {};
   uiValues.preferredDeviceMac = '';
