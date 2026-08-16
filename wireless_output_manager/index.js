@@ -469,7 +469,6 @@ WirelessOutputManager.prototype.getUIConfig = function () {
       })
       : null;
     set('sections[1].content[2]', 'hidden', !bluetoothDeviceVolume);
-    set('sections[1].content[3]', 'hidden', !bluetoothDeviceVolume);
     if (bluetoothDeviceVolume) {
       set('sections[1].content[2]', 'value', bluetoothDeviceVolume.maximum);
       set('sections[1].content[2]', 'description',
@@ -481,11 +480,10 @@ WirelessOutputManager.prototype.getUIConfig = function () {
     }) : null;
     var softwareVolumeAvailable = playerVolumeState && playerVolumeState.disableVolumeControl !== true &&
       Number.isFinite(Number(playerVolumeState.volume));
-    set('sections[1].content[4]', 'hidden', !softwareVolumeAvailable);
-    set('sections[1].content[5]', 'hidden', !softwareVolumeAvailable);
+    set('sections[1].content[3]', 'hidden', !softwareVolumeAvailable);
     if (softwareVolumeAvailable) {
-      set('sections[1].content[4]', 'value', Number(playerVolumeState.volume));
-      set('sections[1].content[4]', 'description',
+      set('sections[1].content[3]', 'value', Number(playerVolumeState.volume));
+      set('sections[1].content[3]', 'description',
         'Current Volumio software volume: ' + Number(playerVolumeState.volume) + '%. This is separate from the selected Bluetooth device volume; effective loudness depends on both. Change Hardware or Software mixer mode only in Volumio Playback Options.');
     }
     var audioDestinationDescription = outputEnabled
@@ -877,6 +875,53 @@ WirelessOutputManager.prototype.setVolumioSoftwareVolume = function (data) {
     await self.refreshUI();
     return { requested: requested, actual: Number(verified.volume) };
   }, 'Volumio software volume updated');
+};
+
+WirelessOutputManager.prototype.saveVolumeSettings = function (data) {
+  var self = this;
+  return self._action('Applying volume settings', async function () {
+    data = data || {};
+    var changed = [];
+    var deviceId = String(self.config.get('preferredDeviceMac') || '').toUpperCase();
+    var deviceInfo = BluetoothAdapter.MAC_RE.test(deviceId)
+      ? await self.bluetooth.getDeviceInfo(deviceId).catch(function () { return null; })
+      : null;
+
+    if (deviceInfo && deviceInfo.connected && data.bluetoothDeviceVolume !== undefined) {
+      var bluetoothVolume = self._submittedNumber(
+        data, 'bluetoothDeviceVolume', 'Bluetooth device volume');
+      await self.bluetoothVolume.setVolume(deviceId, bluetoothVolume);
+      changed.push('Bluetooth device');
+    }
+
+    if (data.volumioSoftwareVolume !== undefined) {
+      var softwareVolume = self._submittedNumber(
+        data, 'volumioSoftwareVolume', 'Volumio software volume');
+      var before = await self.volumioApi.getState();
+      if (before.disableVolumeControl === true) {
+        throw new Error('Volumio software volume is disabled. Change Mixer Type in Volumio Playback Options.');
+      }
+      await self.volumioApi.setVolume(softwareVolume);
+      var verified = null;
+      for (var attempt = 0; attempt < 8; attempt += 1) {
+        await new Promise(function (resolve) { setTimeout(resolve, 250); });
+        verified = await self.volumioApi.getState().catch(function () { return null; });
+        if (verified && Math.abs(Number(verified.volume) - softwareVolume) <= 2) break;
+      }
+      if (!verified || Math.abs(Number(verified.volume) - softwareVolume) > 2) {
+        throw new Error('Volumio software volume could not be verified');
+      }
+      changed.push('Volumio software');
+    }
+
+    if (!changed.length) {
+      throw new Error(deviceInfo && !deviceInfo.connected
+        ? 'Connect the selected Bluetooth device before changing its device volume'
+        : 'No available volume setting was received');
+    }
+    await self.refreshUI();
+    return { changed: changed };
+  }, 'Volume settings updated');
 };
 
 WirelessOutputManager.prototype.runDiagnostics = function () {
