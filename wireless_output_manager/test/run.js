@@ -293,6 +293,11 @@ async function main() {
   var volumeSetCalls = [];
   var volumePlugin = new WirelessOutputManager({ coreCommand: {}, logger: {}, configManager: {} });
   volumePlugin.log = { info: function () {}, warn: function () {} };
+  volumePlugin.volumeRestoreTimeoutMs = 50;
+  volumePlugin.volumeRestoreSettleMs = 1;
+  volumePlugin.volumeRestoreVerifyMs = 1;
+  volumePlugin.volumeRestoreStableMs = 1;
+  volumePlugin.volumeRestoreRetryMs = 1;
   volumePlugin.volumioApi = {
     getState: async function () {
       return { volume: softwareVolume, mute: softwareMuted, disableVolumeControl: false };
@@ -309,7 +314,8 @@ async function main() {
   });
   assert.strictEqual(softwareVolume, 27, 'manual routing must restore the previous Volumio volume');
   assert.strictEqual(softwareMuted, false, 'manual routing must preserve an unmuted state');
-  assert.deepStrictEqual(volumeSetCalls, [27, 'unmute'], 'volume and mute state must both be restored');
+  assert.deepStrictEqual(volumeSetCalls, ['mute', 0, 'mute', 'mute', 27, 'mute', 'unmute'],
+    'routing must first enter the 0% muted safety state, then restore volume before unmuting');
 
   softwareVolume = 18;
   softwareMuted = true;
@@ -320,7 +326,38 @@ async function main() {
   });
   assert.strictEqual(softwareVolume, 18, 'manual routing must restore volume while muted');
   assert.strictEqual(softwareMuted, true, 'manual routing must restore a muted state');
-  assert.deepStrictEqual(volumeSetCalls, [18, 'mute'], 'muted state must be restored after numeric volume');
+  assert.deepStrictEqual(volumeSetCalls, ['mute', 0, 'mute', 'mute', 18, 'mute'],
+    'an originally muted state must remain muted after restoration');
+
+  softwareVolume = 25;
+  softwareMuted = false;
+  volumeSetCalls = [];
+  var volumeWrites = 0;
+  var overrideNextRead = false;
+  volumePlugin.volumioApi = {
+    getState: async function () {
+      if (overrideNextRead) {
+        overrideNextRead = false;
+        softwareVolume = 75; // Simulate Bluetooth absolute volume overriding the first restoration.
+      }
+      return { volume: softwareVolume, mute: softwareMuted, disableVolumeControl: false };
+    },
+    setVolume: async function (value) {
+      volumeSetCalls.push(value);
+      if (value === 'mute') softwareMuted = true;
+      else if (value === 'unmute') softwareMuted = false;
+      else {
+        softwareVolume = Number(value);
+        if (Number(value) === 25) {
+          volumeWrites += 1;
+          if (volumeWrites === 1) overrideNextRead = true;
+        }
+      }
+    }
+  };
+  await volumePlugin._withPreservedSoftwareVolume(async function () { softwareVolume = 75; });
+  assert.strictEqual(softwareVolume, 25, 'volume restoration must recover from a transient Bluetooth override');
+  assert(volumeWrites >= 2, 'volume restoration must retry after Bluetooth overrides the first write');
 
   var hardwareSetCalls = 0;
   volumePlugin.volumioApi = {
@@ -340,23 +377,37 @@ async function main() {
     'routing must not start when the current volume cannot be determined');
   assert.strictEqual(unsafeOperationRan, false, 'an unreadable volume must stop the routing operation before it starts');
 
+  softwareVolume = 32;
+  softwareMuted = false;
+  var failRestoration = false;
   volumePlugin.volumioApi = {
-    getState: async function () { return { volume: 32, mute: false, disableVolumeControl: false }; },
-    setVolume: async function () { throw new Error('set volume failed'); }
+    getState: async function () { return { volume: softwareVolume, mute: softwareMuted, disableVolumeControl: false }; },
+    setVolume: async function (value) {
+      if (failRestoration) throw new Error('set volume failed');
+      if (value === 'mute') softwareMuted = true;
+      else if (value === 'unmute') softwareMuted = false;
+      else softwareVolume = Number(value);
+    }
   };
-  await assert.rejects(volumePlugin._withPreservedSoftwareVolume(async function () {}),
+  await assert.rejects(volumePlugin._withPreservedSoftwareVolume(async function () { failRestoration = true; }),
     /playback remains stopped/,
     'a failed Volumio-volume restoration must produce a clear safety error');
 
-  var verificationReads = 0;
+  softwareVolume = 32;
+  softwareMuted = false;
+  var ignoreRestoration = false;
   volumePlugin.volumioApi = {
-    getState: async function () {
-      verificationReads += 1;
-      return { volume: verificationReads === 1 ? 32 : 100, mute: false, disableVolumeControl: false };
-    },
-    setVolume: async function () {}
+    getState: async function () { return {
+      volume: softwareVolume, mute: softwareMuted, disableVolumeControl: false
+    }; },
+    setVolume: async function (value) {
+      if (ignoreRestoration) return;
+      if (value === 'mute') softwareMuted = true;
+      else if (value === 'unmute') softwareMuted = false;
+      else softwareVolume = Number(value);
+    }
   };
-  await assert.rejects(volumePlugin._withPreservedSoftwareVolume(async function () {}),
+  await assert.rejects(volumePlugin._withPreservedSoftwareVolume(async function () { ignoreRestoration = true; }),
     /could not be verified.*playback remains stopped/,
     'a restoration that cannot be verified must keep playback stopped');
 

@@ -23,6 +23,11 @@ function WirelessOutputManager(context) {
   this.transportRecoveries = {};
   this.transportPollAttempts = 10;
   this.transportPollDelayMs = 500;
+  this.volumeRestoreTimeoutMs = 15000;
+  this.volumeRestoreSettleMs = 1500;
+  this.volumeRestoreVerifyMs = 750;
+  this.volumeRestoreStableMs = 1500;
+  this.volumeRestoreRetryMs = 500;
   this.lastError = '';
   this.lastDiagnostics = null;
   this.devices = [];
@@ -140,29 +145,85 @@ WirelessOutputManager.prototype._captureVolumeState = async function () {
   return { volume: volume, mute: Boolean(state.mute) };
 };
 
+WirelessOutputManager.prototype._forceSafeVolumeState = async function () {
+  var self = this;
+  // Mute first so reducing the numeric value cannot produce an audible burst.
+  await self.volumioApi.setVolume('mute');
+  await self.volumioApi.setVolume(0);
+  await self.volumioApi.setVolume('mute');
+  await new Promise(function (resolve) { setTimeout(resolve, self.volumeRestoreVerifyMs); });
+  var state = await self.volumioApi.getState();
+  if (Number(state.volume) !== 0 || Boolean(state.mute) !== true) {
+    throw new Error('Volumio could not be muted at 0%');
+  }
+};
+
 WirelessOutputManager.prototype._restoreVolumeState = async function (saved) {
   var self = this;
   if (!saved) return;
-  try {
-    await self.volumioApi.setVolume(saved.volume);
-    if (saved.mute) await self.volumioApi.setVolume('mute');
-    else await self.volumioApi.setVolume('unmute');
-  } catch (error) {
-    throw new Error('Volumio volume could not be restored; playback remains stopped. Set the volume manually before pressing Play.');
-  }
-  for (var attempt = 0; attempt < 10; attempt += 1) {
-    var state = await self.volumioApi.getState().catch(function () { return null; });
-    if (state && Number(state.volume) === saved.volume && Boolean(state.mute) === saved.mute) {
-      self.log.info('Restored Volumio volume to ' + saved.volume + '%' + (saved.mute ? ' (muted)' : '') + ' after changing audio routing');
-      return;
+  var delay = function (milliseconds) {
+    return new Promise(function (resolve) { setTimeout(resolve, milliseconds); });
+  };
+  var matchesMutedVolume = function (state) {
+    return state && Number(state.volume) === saved.volume && Boolean(state.mute) === true;
+  };
+  var matchesFinalState = function (state) {
+    return state && Number(state.volume) === saved.volume && Boolean(state.mute) === saved.mute;
+  };
+  var deadline = Date.now() + self.volumeRestoreTimeoutMs;
+  var attempts = 0;
+
+  // BlueZ/BlueALSA can publish an initial absolute-volume value while the new
+  // transport settles. Wait briefly, then reapply Volumio's saved state until
+  // it remains stable across two checks. Playback is already stopped here.
+  await delay(self.volumeRestoreSettleMs);
+  while (Date.now() <= deadline) {
+    attempts += 1;
+    try {
+      await self.volumioApi.setVolume('mute');
+      await self.volumioApi.setVolume(saved.volume);
+      await self.volumioApi.setVolume('mute');
+    } catch (error) {
+      self.log.warn('Volume restoration attempt ' + attempts + ' failed: ' + error.message);
+      if (Date.now() < deadline) await delay(self.volumeRestoreRetryMs);
+      continue;
     }
-    if (attempt < 9) await new Promise(function (resolve) { setTimeout(resolve, 250); });
+
+    await delay(self.volumeRestoreVerifyMs);
+    var state = await self.volumioApi.getState().catch(function () { return null; });
+    if (matchesMutedVolume(state)) {
+      await delay(self.volumeRestoreStableMs);
+      state = await self.volumioApi.getState().catch(function () { return null; });
+      if (matchesMutedVolume(state)) {
+        if (!saved.mute) {
+          await self.volumioApi.setVolume('unmute').catch(function () {});
+          await delay(self.volumeRestoreVerifyMs);
+          state = await self.volumioApi.getState().catch(function () { return null; });
+        }
+      }
+      if (matchesFinalState(state)) {
+        self.log.info('Restored Volumio volume to ' + saved.volume + '%' + (saved.mute ? ' (muted)' : '') +
+          ' after changing audio routing' + (attempts > 1 ? ' (' + attempts + ' attempts)' : ''));
+        return;
+      }
+    }
+    if (Date.now() < deadline) await delay(self.volumeRestoreRetryMs);
   }
+  await self._forceSafeVolumeState().catch(function (error) {
+    self.log.warn('Unable to confirm the 0% muted safety state: ' + error.message);
+  });
   throw new Error('Volumio volume could not be verified after routing changed; playback remains stopped. Set the volume manually before pressing Play.');
 };
 
 WirelessOutputManager.prototype._withPreservedSoftwareVolume = async function (operation) {
   var volumeState = await this._captureVolumeState();
+  if (volumeState) {
+    try {
+      await this._forceSafeVolumeState();
+    } catch (error) {
+      throw new Error('Unable to mute Volumio at 0% before changing audio routing; no routing change was made.');
+    }
+  }
   var result;
   try {
     result = await operation();
@@ -394,8 +455,8 @@ WirelessOutputManager.prototype.getUIConfig = function () {
     set('sections[1]', 'hidden', !preferred);
     set('sections[1].content[0]', 'hidden', !connected);
     set('sections[1]', 'description', outputEnabled
-      ? 'Music is routed to ' + preferredName + '. If the speaker turns off or disconnects, there is no automatic fallback: choose Play on default audio output manually. With Mixer Type set to Hardware, Bluetooth is effectively sent at 100%; choose Software to control Bluetooth volume from Volumio.'
-      : 'Music is routed to the default device selected in Volumio Playback Options. To use the connected saved speaker, choose Play on Bluetooth speaker, then press Play.');
+      ? 'Music is routed to ' + preferredName + '. If the speaker turns off or disconnects, there is no automatic fallback: choose Play on default audio output manually. Switching stops playback and temporarily mutes Volumio at 0% for safety. With Mixer Type set to Hardware, Bluetooth is effectively sent at 100%; choose Software to control Bluetooth volume from Volumio.'
+      : 'Music is routed to the default device selected in Volumio Playback Options. To use the connected saved speaker, choose Play on Bluetooth speaker, then press Play. Switching temporarily mutes Volumio at 0% and automatically restores the previous volume and mute state before playback can resume.');
     var pairedAudio = options.filter(function (device) { return device.paired && device.audioCapable === true; });
     set('sections[2]', 'hidden', !preferred && pairedAudio.length === 0);
     set('sections[2].content[0]', 'hidden', !preferred || connected);
@@ -419,7 +480,7 @@ WirelessOutputManager.prototype.getUIConfig = function () {
     else {
       codecDescription = 'Saved for ' + preferredName + ': ' + preferredCodecName + '. Active: ' + (codecStatus.activeCodec ? self.codecManager.displayName(codecStatus.activeCodec) : 'unknown') +
         '. Available: ' + (codecStatus.availableCodecs.map(function (codec) { return self.codecManager.displayName(codec); }).join(', ') || 'none reported') +
-        '. Automatic chooses LDAC, aptX HD, AAC, aptX, then SBC. The choice is applied when you select Play on Bluetooth speaker. Volumio volume and mute state are preserved while routing changes.';
+        '. Automatic chooses LDAC, aptX HD, AAC, aptX, then SBC. The choice is applied when you select Play on Bluetooth speaker. Switching stops playback and temporarily mutes Volumio at 0%; the previous volume and mute state are restored automatically before playback can resume.';
       if (codecStatus.systemCodecs.indexOf('AAC') === -1) codecDescription += ' AAC is not available in the installed BlueALSA build.';
     }
     set('sections[3].content[2]', 'description', codecDescription);
