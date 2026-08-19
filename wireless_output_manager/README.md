@@ -214,6 +214,8 @@ The AirPlay work is currently an isolated engineering prototype, not a plugin fe
 
 The prototype discovers `_airplay._tcp` and `_raop._tcp` receivers through `avahi-browse` when available, with a built-in mDNS client when Volumio has Avahi running but does not include that optional command. It can send a short, quiet test tone using Music Assistant's GPLv3 `cliairplay` sender. The sender is pinned to version 0.5.2 and verified by its published SHA-256 checksum. It remains in the plugin's local `bin/airplay` directory and is not installed system-wide.
 
+Volumio 4 on Raspberry Pi can use a 64-bit kernel with a 32-bit `armhf` userland. The upstream sender only publishes a Linux `aarch64` build. On that mixed Pi 4 or Pi 5 system, the installer downloads checksum-pinned Debian Bookworm arm64 runtime packages and extracts them privately under `bin/airplay/runtime-arm64`. It does not install Debian packages, enable multiarch or change system libraries. A genuinely 32-bit-only ARM kernel remains unsupported because it cannot execute the available sender build.
+
 Install the prototype sender in a source checkout:
 
 ```bash
