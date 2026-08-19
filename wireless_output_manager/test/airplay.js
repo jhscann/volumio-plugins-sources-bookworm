@@ -4,6 +4,25 @@ var assert = require('assert');
 var AirPlayAdapter = require('../lib/adapters/airplay');
 var AirPlayPrototype = require('../lib/airplayPrototype').AirPlayPrototype;
 var generateTone = require('../lib/airplayPrototype').generateTone;
+var MdnsDiscovery = require('../lib/mdnsDiscovery').MdnsDiscovery;
+var encodeName = require('../lib/mdnsDiscovery').encodeName;
+var parsePacket = require('../lib/mdnsDiscovery').parsePacket;
+
+function dnsRecord(name, type, data) {
+  var header = Buffer.alloc(10);
+  header.writeUInt16BE(type, 0);
+  header.writeUInt16BE(1, 2);
+  header.writeUInt32BE(120, 4);
+  header.writeUInt16BE(data.length, 8);
+  return Buffer.concat([encodeName(name), header, data]);
+}
+
+function txtData(values) {
+  return Buffer.concat(values.map(function (value) {
+    var item = Buffer.from(value, 'utf8');
+    return Buffer.concat([Buffer.from([item.length]), item]);
+  }));
+}
 
 async function main() {
   var responses = {};
@@ -37,6 +56,29 @@ async function main() {
     'the sender must bind the interface that routes to the receiver');
   assert.strictEqual(args[args.length - 1], '192.168.1.50');
 
+  var instance = 'Living Room._airplay._tcp.local';
+  var target = 'living.local';
+  var srvData = Buffer.concat([Buffer.alloc(4), Buffer.from([0x1b, 0x58]), encodeName(target)]);
+  var addressData = Buffer.from([192, 168, 1, 50]);
+  var responseHeader = Buffer.alloc(12);
+  responseHeader.writeUInt16BE(0x8400, 2);
+  responseHeader.writeUInt16BE(4, 6);
+  var packet = Buffer.concat([
+    responseHeader,
+    dnsRecord('_airplay._tcp.local', 12, encodeName(instance)),
+    dnsRecord(instance, 33, srvData),
+    dnsRecord(instance, 16, txtData(['deviceid=AA:BB:CC:DD:EE:FF', 'features=0x1'])),
+    dnsRecord(target, 1, addressData)
+  ]);
+  var parsedPacket = parsePacket(packet);
+  assert.strictEqual(parsedPacket.length, 4, 'built-in mDNS must parse PTR, SRV, TXT and A records');
+  var mdns = new MdnsDiscovery();
+  var nativeServices = mdns._recordsToServices(parsedPacket, ['_airplay._tcp']);
+  assert.strictEqual(nativeServices.length, 1);
+  assert.strictEqual(nativeServices[0].serviceName, 'Living Room');
+  assert.strictEqual(nativeServices[0].address, '192.168.1.50');
+  assert.strictEqual(nativeServices[0].port, 7000);
+
   var prototype = new AirPlayPrototype({ adapter: adapter, runner: runner });
   assert.strictEqual(prototype.findReceiver(receivers, 'living room').id, 'AA:BB:CC:DD:EE:FF');
   assert.strictEqual(prototype.findReceiver(receivers, 'AA:BB').name, 'Living Room');
@@ -57,6 +99,16 @@ async function main() {
   responses['avahi-browse -rtp _raop._tcp'] = { exitCode: 0, stdout: output.split('\n')[1], stderr: '' };
   receivers = await adapter.discover();
   assert.strictEqual(receivers.length, 1, 'discovery must combine both service types');
+
+  responses['which avahi-browse'] = { exitCode: 1, stdout: '', stderr: '' };
+  var fallbackAdapter = new AirPlayAdapter({
+    runner: runner,
+    pluginDir: '/tmp/no-airplay-binary',
+    mdns: { discover: async function () { return nativeServices; } }
+  });
+  receivers = await fallbackAdapter.discover();
+  assert.strictEqual(receivers.length, 1, 'built-in mDNS must be used when avahi-browse is absent');
+  assert.strictEqual(receivers[0].name, 'Living Room');
 
   console.log('AirPlay prototype tests passed');
 }

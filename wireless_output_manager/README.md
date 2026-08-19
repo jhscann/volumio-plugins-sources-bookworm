@@ -212,7 +212,7 @@ The internal adapter boundary allows future AirPlay, Sonos, Chromecast and UPnP/
 
 The AirPlay work is currently an isolated engineering prototype, not a plugin feature. It deliberately does not alter the settings page, Volumio routing, MPD, ALSA, system services or the Bluetooth implementation.
 
-The prototype discovers `_airplay._tcp` and `_raop._tcp` receivers through the existing Avahi service and can send a short, quiet test tone using Music Assistant's GPLv3 `cliairplay` sender. The sender is pinned to version 0.5.2 and verified by its published SHA-256 checksum. It remains in the plugin's local `bin/airplay` directory and is not installed system-wide.
+The prototype discovers `_airplay._tcp` and `_raop._tcp` receivers through `avahi-browse` when available, with a built-in mDNS client when Volumio has Avahi running but does not include that optional command. It can send a short, quiet test tone using Music Assistant's GPLv3 `cliairplay` sender. The sender is pinned to version 0.5.2 and verified by its published SHA-256 checksum. It remains in the plugin's local `bin/airplay` directory and is not installed system-wide.
 
 Install the prototype sender in a source checkout:
 
@@ -239,4 +239,4 @@ node scripts/airplay-prototype.js tone \
 
 Keep headphones off until the receiver's actual level is known. The prototype refuses levels above 15%. AirPlay receiver volume is separate from Volumio software volume and any physical amplifier or headphone volume.
 
-The test requires `avahi-browse`, a receiver on the same discoverable network and free access to the ports required by that receiver. Native AirPlay 2 receivers may use PTP timing on UDP 319 and 320. This prototype does not grant capabilities, open firewall ports, install packages, save pairing credentials or attempt multi-room playback. PIN-protected Apple receivers are therefore outside this first test.
+The test requires a receiver on the same discoverable network and free access to the ports required by that receiver. Native AirPlay 2 receivers may use PTP timing on UDP 319 and 320. This prototype does not grant capabilities, open firewall ports, install packages, save pairing credentials or attempt multi-room playback. PIN-protected Apple receivers are therefore outside this first test.

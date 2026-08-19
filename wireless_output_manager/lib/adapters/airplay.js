@@ -2,6 +2,7 @@
 
 var fs = require('fs-extra');
 var path = require('path');
+var MdnsDiscovery = require('../mdnsDiscovery').MdnsDiscovery;
 
 var RAOP_FIELDS = ['et', 'md', 'am', 'pk', 'pw', 'cn'];
 
@@ -11,6 +12,7 @@ function AirPlayAdapter(options) {
   this.logger = options.logger || { info: function () {}, warn: function () {}, error: function () {} };
   this.pluginDir = options.pluginDir || path.resolve(__dirname, '..', '..');
   this.binaryPath = options.binaryPath || '';
+  this.mdns = options.mdns || new MdnsDiscovery();
 }
 
 AirPlayAdapter.prototype._decodeAvahi = function (value) {
@@ -127,6 +129,14 @@ AirPlayAdapter.prototype.mergeRecords = function (records) {
 };
 
 AirPlayAdapter.prototype.discover = async function () {
+  var browse = await this.runner.run('which', ['avahi-browse'], {
+    allowFailure: true,
+    timeoutMs: 3000
+  }).catch(function () { return { exitCode: 1 }; });
+  if (browse.exitCode !== 0) {
+    this.logger.info('avahi-browse is unavailable; using the built-in mDNS discovery client');
+    return this.mergeRecords(await this.mdns.discover(['_airplay._tcp', '_raop._tcp']));
+  }
   var checks = await Promise.all(['_airplay._tcp', '_raop._tcp'].map(function (serviceType) {
     return this.runner.run('avahi-browse', ['-rtp', serviceType], {
       allowFailure: true,
