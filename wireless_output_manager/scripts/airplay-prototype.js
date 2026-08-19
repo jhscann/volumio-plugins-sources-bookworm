@@ -58,7 +58,19 @@ async function main() {
     console.log(JSON.stringify(result, null, 2));
     return;
   }
-  throw new Error('Usage: airplay-prototype.js discover|check|tone --device <name-or-id> ' +
+  if (command === 'file') {
+    var fileReceiver = prototype.findReceiver(receivers, option('--device', ''));
+    console.error('Sending a short file excerpt to ' + fileReceiver.name +
+      '. Keep headphones off until its level is confirmed. Receiver volume remains limited.');
+    var fileResult = await prototype.playAudioFile(fileReceiver, option('--file', ''), {
+      address: option('--address', ''),
+      volume: option('--volume', 5),
+      seconds: option('--seconds', 5)
+    });
+    console.log(JSON.stringify(fileResult, null, 2));
+    return;
+  }
+  throw new Error('Usage: airplay-prototype.js discover|check|tone|file --device <name-or-id> ' +
     '[--address <advertised-ip>] [--volume 0-15] [--amplitude 0.001-0.1] [--seconds 1-10]');
 }
 

@@ -253,4 +253,16 @@ Keep headphones off until the receiver's actual level is known. The prototype re
 
 The generated signal defaults to only 1% amplitude (`0.01`). If that is inaudible, `--amplitude 0.1` raises the signal to a still-capped 10% while leaving the AirPlay receiver-volume ceiling at 15%. These are independent safety controls.
 
+After the tone succeeds, a one-to-ten-second excerpt from a local or mounted audio file can be decoded by the existing FFmpeg installation and sent without changing MPD or ALSA:
+
+```bash
+node scripts/airplay-prototype.js file \
+  --device "AA:BB:CC:DD:EE:FF" \
+  --file "/var/lib/mpd/music/NAS/example.flac" \
+  --volume 5 \
+  --seconds 5
+```
+
+The complete excerpt is decoded into a bounded in-memory PCM buffer before the receiver is contacted. The command refuses excerpts longer than ten seconds and does not enable or reuse Volumio's multiroom FIFO.
+
 The test requires a receiver on the same discoverable network and free access to the ports required by that receiver. Native AirPlay 2 receivers may use PTP timing on UDP 319 and 320. This prototype does not grant capabilities, open firewall ports, install packages, save pairing credentials or attempt multi-room playback. PIN-protected Apple receivers are therefore outside this first test.

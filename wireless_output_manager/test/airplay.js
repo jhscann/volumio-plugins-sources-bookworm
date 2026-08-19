@@ -4,6 +4,7 @@ var assert = require('assert');
 var AirPlayAdapter = require('../lib/adapters/airplay');
 var AirPlayPrototype = require('../lib/airplayPrototype').AirPlayPrototype;
 var generateTone = require('../lib/airplayPrototype').generateTone;
+var ffmpegFileArgs = require('../lib/airplayPrototype').ffmpegFileArgs;
 var MdnsDiscovery = require('../lib/mdnsDiscovery').MdnsDiscovery;
 var encodeName = require('../lib/mdnsDiscovery').encodeName;
 var parsePacket = require('../lib/mdnsDiscovery').parsePacket;
@@ -102,6 +103,13 @@ async function main() {
     maximum = Math.max(maximum, Math.abs(tone.pcm.readInt16LE(offset)));
   }
   assert(maximum <= Math.ceil(32767 * 0.01), 'test tone amplitude must remain bounded');
+
+  var decodeArgs = ffmpegFileArgs('/music/test.flac', 5);
+  assert.strictEqual(decodeArgs[decodeArgs.indexOf('-i') + 1], '/music/test.flac');
+  assert.strictEqual(decodeArgs[decodeArgs.indexOf('-t') + 1], '5');
+  assert.strictEqual(decodeArgs[decodeArgs.indexOf('-f') + 1], 's16le');
+  assert.strictEqual(decodeArgs[decodeArgs.indexOf('-ar') + 1], '44100');
+  assert.strictEqual(decodeArgs[decodeArgs.indexOf('-ac') + 1], '2');
 
   await assert.rejects(prototype.playTestTone(receivers[0], { volume: 16 }), /between 0 and 15%/,
     'the prototype must reject unsafe receiver volume before starting a process');

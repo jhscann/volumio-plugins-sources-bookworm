@@ -37,6 +37,17 @@ function generateTone(options) {
   return { pcm: output, seconds: seconds, sampleRate: sampleRate, amplitude: amplitude };
 }
 
+function ffmpegFileArgs(filePath, seconds) {
+  return [
+    '-hide_banner', '-loglevel', 'error', '-nostdin',
+    '-i', filePath,
+    '-t', String(seconds),
+    '-vn', '-sn', '-dn',
+    '-f', 's16le', '-acodec', 'pcm_s16le',
+    '-ar', '44100', '-ac', '2', 'pipe:1'
+  ];
+}
+
 function AirPlayPrototype(options) {
   options = options || {};
   this.adapter = options.adapter;
@@ -81,7 +92,64 @@ AirPlayPrototype.prototype._openCommandPipe = function (pipePath) {
   });
 };
 
-AirPlayPrototype.prototype.playTestTone = async function (receiver, options) {
+AirPlayPrototype.prototype._decodeAudioFile = function (filePath, seconds) {
+  var self = this;
+  return new Promise(function (resolve, reject) {
+    var child = self.spawn('ffmpeg', ffmpegFileArgs(filePath, seconds), {
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+    var chunks = [];
+    var size = 0;
+    var errorOutput = '';
+    var settled = false;
+    var maximumBytes = Math.ceil(seconds * 44100 * 4) + 4096;
+    var timer = setTimeout(function () {
+      if (settled) return;
+      settled = true;
+      child.kill('SIGTERM');
+      reject(new Error('FFmpeg timed out while decoding the AirPlay test excerpt'));
+    }, 30000);
+    child.stdout.on('data', function (chunk) {
+      if (settled) return;
+      size += chunk.length;
+      if (size > maximumBytes) {
+        settled = true;
+        clearTimeout(timer);
+        child.kill('SIGTERM');
+        reject(new Error('FFmpeg produced more audio than the bounded test allows'));
+        return;
+      }
+      chunks.push(chunk);
+    });
+    child.stderr.on('data', function (chunk) {
+      errorOutput = (errorOutput + chunk.toString('utf8')).slice(-8192);
+    });
+    child.once('error', function (error) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(new Error('Could not start FFmpeg: ' + error.message));
+    });
+    child.once('close', function (code) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (code !== 0) {
+        reject(new Error('FFmpeg could not decode the selected file' +
+          (errorOutput.trim() ? ': ' + errorOutput.trim() : '')));
+        return;
+      }
+      var pcm = Buffer.concat(chunks);
+      if (!pcm.length) {
+        reject(new Error('FFmpeg decoded no audio from the selected file'));
+        return;
+      }
+      resolve({ pcm: pcm, seconds: pcm.length / (44100 * 4), sampleRate: 44100 });
+    });
+  });
+};
+
+AirPlayPrototype.prototype._playPcm = async function (receiver, audio, options) {
   var self = this;
   options = options || {};
   receiver = self.selectReceiverAddress(receiver, options.address);
@@ -89,32 +157,27 @@ AirPlayPrototype.prototype.playTestTone = async function (receiver, options) {
   if (!Number.isFinite(volume) || volume < 0 || volume > 15) {
     throw new Error('Prototype receiver volume must be between 0 and 15%');
   }
-  var amplitude = Number(options.amplitude === undefined ? 0.01 : options.amplitude);
-  if (!Number.isFinite(amplitude) || amplitude < 0.001 || amplitude > 0.1) {
-    throw new Error('Prototype test-signal amplitude must be between 0.001 and 0.1');
-  }
   var sender = await self.adapter.checkSender();
   var temporaryDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'wom-airplay-'));
   var commandPipe = path.join(temporaryDirectory, 'commands');
   await self.runner.run('mkfifo', [commandPipe], { timeoutMs: 3000 });
   var sourceAddress = await self.adapter.getSourceAddress(receiver.address);
   var args = self.adapter.buildSenderArgs(receiver, commandPipe, Math.round(volume), sourceAddress);
-  var tone = generateTone(Object.assign({}, options, { amplitude: amplitude }));
   var child;
   var commandWriter;
   var output = '';
   var connectedResolve;
-  var audioResolve;
+  var audioReadyResolve;
   var startedResolve;
   var connected = new Promise(function (resolve) { connectedResolve = resolve; });
-  var audio = new Promise(function (resolve) { audioResolve = resolve; });
+  var audioReady = new Promise(function (resolve) { audioReadyResolve = resolve; });
   var started = new Promise(function (resolve) { startedResolve = resolve; });
 
   function inspect(chunk) {
     var text = chunk.toString('utf8');
     output = (output + text).slice(-64 * 1024);
     if (/\[STATUS\]\s+connected/i.test(text)) connectedResolve();
-    if (/\[STATUS\]\s+audio\b/i.test(text)) audioResolve();
+    if (/\[STATUS\]\s+audio\b/i.test(text)) audioReadyResolve();
     if (/\[STATUS\]\s+started\b/i.test(text)) startedResolve();
   }
 
@@ -141,17 +204,17 @@ AirPlayPrototype.prototype.playTestTone = async function (receiver, options) {
     await waitFor(connected, 15000, 'Timed out connecting to ' + receiver.name);
     commandWriter = await withTimeout(self._openCommandPipe(commandPipe), 3000,
       'cliairplay did not open its command pipe');
-    commandWriter.write('TITLE=Wireless Output Manager test\n');
-    commandWriter.write('ARTIST=Volumio prototype\n');
-    commandWriter.write('DURATION=' + tone.seconds + '\n');
+    commandWriter.write('TITLE=' + (options.title || 'Wireless Output Manager test') + '\n');
+    commandWriter.write('ARTIST=' + (options.artist || 'Volumio prototype') + '\n');
+    commandWriter.write('DURATION=' + Math.ceil(audio.seconds) + '\n');
     commandWriter.write('ACTION=SENDMETA\n');
-    if (!child.stdin.write(tone.pcm)) {
+    if (!child.stdin.write(audio.pcm)) {
       await new Promise(function (resolve) { child.stdin.once('drain', resolve); });
     }
-    await waitFor(audio, 5000, 'The sender connected but did not accept test audio');
+    await waitFor(audioReady, 5000, 'The sender connected but did not accept test audio');
     commandWriter.write('START_UNIX_MS=0\nACTION=START\n');
     await waitFor(started, 10000, 'The receiver did not acknowledge the test start');
-    await delay(tone.seconds * 1000 + 1000);
+    await delay(audio.seconds * 1000 + 1000);
     commandWriter.write('ACTION=STOP\n');
     child.stdin.end();
     var stopped = await withTimeout(exit, 5000, 'The sender did not stop cleanly');
@@ -161,8 +224,7 @@ AirPlayPrototype.prototype.playTestTone = async function (receiver, options) {
       id: receiver.id,
       address: receiver.address,
       volume: Math.round(volume),
-      amplitude: tone.amplitude,
-      seconds: tone.seconds,
+      seconds: audio.seconds,
       output: output.trim()
     };
   } finally {
@@ -172,4 +234,41 @@ AirPlayPrototype.prototype.playTestTone = async function (receiver, options) {
   }
 };
 
-module.exports = { AirPlayPrototype: AirPlayPrototype, generateTone: generateTone };
+AirPlayPrototype.prototype.playTestTone = async function (receiver, options) {
+  options = options || {};
+  var amplitude = Number(options.amplitude === undefined ? 0.01 : options.amplitude);
+  if (!Number.isFinite(amplitude) || amplitude < 0.001 || amplitude > 0.1) {
+    throw new Error('Prototype test-signal amplitude must be between 0.001 and 0.1');
+  }
+  var tone = generateTone(Object.assign({}, options, { amplitude: amplitude }));
+  var result = await this._playPcm(receiver, tone, options);
+  result.amplitude = tone.amplitude;
+  return result;
+};
+
+AirPlayPrototype.prototype.playAudioFile = async function (receiver, filePath, options) {
+  options = options || {};
+  var seconds = Number(options.seconds === undefined ? 5 : options.seconds);
+  if (!Number.isFinite(seconds) || seconds < 1 || seconds > 10) {
+    throw new Error('Prototype file excerpt must be between 1 and 10 seconds');
+  }
+  var resolvedPath = path.resolve(String(filePath || ''));
+  var details;
+  try {
+    details = await fs.stat(resolvedPath);
+  } catch (error) {
+    throw new Error('Selected audio file was not found: ' + resolvedPath);
+  }
+  if (!details.isFile()) throw new Error('Selected audio source is not a regular file');
+  var audio = await this._decodeAudioFile(resolvedPath, seconds);
+  return this._playPcm(receiver, audio, Object.assign({}, options, {
+    title: path.basename(resolvedPath),
+    artist: 'Volumio AirPlay file test'
+  }));
+};
+
+module.exports = {
+  AirPlayPrototype: AirPlayPrototype,
+  ffmpegFileArgs: ffmpegFileArgs,
+  generateTone: generateTone
+};
