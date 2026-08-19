@@ -493,9 +493,10 @@ WirelessOutputManager.prototype.getUIConfig = function () {
       set('sections[2].content[1]', 'value', bluetoothDeviceVolume.maximum);
       set('sections[2].content[1]', 'description',
         'Current Bluetooth stream volume: ' + bluetoothDeviceVolume.maximum +
-        '%. This is local BlueALSA digital gain, not necessarily the device\'s physical volume. Routing caps it at 10% for safety; increase it gradually after playback begins.');
+        '%. This is local BlueALSA digital gain, not necessarily the device\'s physical volume. A normal switch to Bluetooth starts at 10% for safety; Apply codec and volume uses the level entered here.');
     }
 
+    var listeningSafety = 'Listening safety: Bluetooth loudness may be controlled at three points — Volumio volume when its software mixer is enabled, Bluetooth stream volume, and the speaker or headphones\' own volume. Keep headphones off your head until routing, codec and stream-volume setup is complete and you have confirmed a safe level. ';
     var outputDescription;
     if (outputEnabled && connected) {
       outputDescription = 'Music output: ' + preferredName + ' over Bluetooth. Changing output stops playback; press Play afterward. ' +
@@ -511,7 +512,7 @@ WirelessOutputManager.prototype.getUIConfig = function () {
       outputDescription = 'Music output: the default device selected in Volumio Playback Options. ' +
         'Select and connect a Bluetooth audio device before choosing Bluetooth output.';
     }
-    set('sections[0]', 'description', outputDescription);
+    set('sections[0]', 'description', listeningSafety + outputDescription);
 
     var pairedAudio = options.filter(function (device) { return device.paired && device.audioCapable === true; });
     set('sections[3]', 'hidden', !preferred && pairedAudio.length === 0);
@@ -541,13 +542,18 @@ WirelessOutputManager.prototype.getUIConfig = function () {
     else {
       codecDescription = 'Sound settings for ' + preferredName + '. Codec preference: ' + preferredCodecName + '. Active: ' + (codecStatus.activeCodec ? self.codecManager.displayName(codecStatus.activeCodec) : 'unknown') +
         '. Available: ' + (codecStatus.availableCodecs.map(function (codec) { return self.codecManager.displayName(codec); }).join(', ') || 'none reported') +
-        '. Automatic chooses LDAC, aptX HD, AAC, aptX, then SBC. A codec change is applied the next time Bluetooth output is selected. ' +
-        'Bluetooth stream volume is local digital gain and is capped at 10% whenever Bluetooth routing starts.';
+        '. Automatic chooses LDAC, aptX HD, AAC, aptX, then SBC. ' +
+        (outputEnabled
+          ? 'Apply codec and volume stops playback, applies and verifies both settings, and keeps Bluetooth selected. Press Play afterward. '
+          : 'The codec preference is saved for the next Bluetooth connection. ') +
+        'A normal switch to Bluetooth starts at 10% stream volume for safety.';
       if (codecStatus.systemCodecs.indexOf('AAC') === -1) codecDescription += ' AAC is not available in the installed BlueALSA build.';
     }
     set('sections[2]', 'description', codecDescription);
     set('sections[2].content[0]', 'description', preferred
-      ? 'Saved for ' + preferredName + '. The choice is applied and verified the next time Bluetooth output is selected.'
+      ? 'Saved for ' + preferredName + '. ' + (outputEnabled
+        ? 'Apply codec and volume changes and verifies the codec now; there is no need to change output first.'
+        : 'The choice is applied and verified the next time Bluetooth output is selected.')
       : 'Select a Bluetooth audio device first.');
 
     set('sections[5].content[4]', 'value', self.lastDiagnostics ? JSON.stringify(self.lastDiagnostics, null, 2) : 'Run diagnostics to collect system state.');
@@ -586,23 +592,59 @@ WirelessOutputManager.prototype.saveBluetoothSoundSettings = function (data) {
     }
 
     var changed = [];
+    var currentCodec = self._preferredCodecFor(deviceId);
+    var submittedCodec = currentCodec;
     if (data.preferredCodec !== undefined) {
-      var submittedCodec = data.preferredCodec;
+      submittedCodec = data.preferredCodec;
       for (var depth = 0; depth < 5 && submittedCodec && typeof submittedCodec === 'object'; depth += 1) {
         if (Array.isArray(submittedCodec)) submittedCodec = submittedCodec[0];
         else if (Object.prototype.hasOwnProperty.call(submittedCodec, 'value')) submittedCodec = submittedCodec.value;
         else break;
       }
-      self._setPreferredCodecFor(deviceId, submittedCodec);
-      changed.push('codec preference');
+      submittedCodec = self.codecManager.normalize(submittedCodec);
     }
 
-    if (data.bluetoothDeviceVolume !== undefined) {
-      var info = await self.bluetooth.getDeviceInfo(deviceId).catch(function () { return null; });
-      if (info && info.connected) {
-        var streamVolume = self._submittedNumber(
-          data, 'bluetoothDeviceVolume', 'Bluetooth stream volume');
-        await self.bluetoothVolume.setVolume(deviceId, streamVolume);
+    var streamVolume = data.bluetoothDeviceVolume !== undefined
+      ? self._submittedNumber(data, 'bluetoothDeviceVolume', 'Bluetooth stream volume')
+      : null;
+    var codecChanged = submittedCodec !== currentCodec;
+    var outputEnabled = Boolean(self.config.get('outputEnabled'));
+    var playbackStopped = false;
+    var appliedVolume = null;
+    var activeCodec = '';
+    var info = await self.bluetooth.getDeviceInfo(deviceId).catch(function () { return null; });
+
+    if (codecChanged && outputEnabled) {
+      if (!info || !info.connected) {
+        throw new Error('Reconnect the selected Bluetooth device before changing its active codec');
+      }
+      await self._withPreservedSoftwareVolume(async function () {
+        await self._stopPlaybackForRouting();
+        playbackStopped = true;
+        await self._ensureBluetoothAudioTransport(deviceId);
+        var codecResult = await self.codecManager.select(deviceId, submittedCodec);
+        activeCodec = codecResult.activeCodec || submittedCodec;
+        self._setPreferredCodecFor(deviceId, submittedCodec);
+        changed.push('codec');
+        try {
+          appliedVolume = streamVolume === null
+            ? await self.bluetoothVolume.applySafetyCap(deviceId)
+            : await self.bluetoothVolume.setVolume(deviceId, streamVolume);
+        } catch (error) {
+          await self.bluetoothVolume.applySafetyCap(deviceId).catch(function (safetyError) {
+            self.btLog.warn('Unable to restore the Bluetooth stream safety cap after a codec change: ' + safetyError.message);
+          });
+          throw error;
+        }
+        changed.push('Bluetooth stream volume');
+      });
+    } else {
+      if (codecChanged) {
+        self._setPreferredCodecFor(deviceId, submittedCodec);
+        changed.push('codec preference');
+      }
+      if (streamVolume !== null && info && info.connected) {
+        appliedVolume = await self.bluetoothVolume.setVolume(deviceId, streamVolume);
         changed.push('Bluetooth stream volume');
       }
     }
@@ -611,8 +653,24 @@ WirelessOutputManager.prototype.saveBluetoothSoundSettings = function (data) {
       throw new Error('Connect the selected Bluetooth device before changing its stream volume');
     }
     await self.refreshUI();
-    return { changed: changed };
-  }, 'Bluetooth sound settings saved');
+    var volumePercent = appliedVolume && appliedVolume.maximum !== undefined
+      ? appliedVolume.maximum
+      : (appliedVolume && appliedVolume.volume && appliedVolume.volume.maximum !== undefined
+        ? appliedVolume.volume.maximum
+        : streamVolume);
+    if (playbackStopped) {
+      self._toast('success', self.codecManager.displayName(activeCodec) + ' is active' +
+        (volumePercent === null ? '' : ' at ' + volumePercent + '% Bluetooth stream volume') +
+        '. Press Play.');
+    } else if (codecChanged) {
+      self._toast('success', self.codecManager.displayName(submittedCodec) +
+        ' saved for the next Bluetooth connection' +
+        (volumePercent === null ? '.' : '; stream volume set to ' + volumePercent + '%.'));
+    } else {
+      self._toast('success', 'Bluetooth stream volume set to ' + volumePercent + '%.');
+    }
+    return { changed: changed, playbackStopped: playbackStopped, volume: volumePercent };
+  });
 };
 
 WirelessOutputManager.prototype.pairAndConnectDevice = function (data) {

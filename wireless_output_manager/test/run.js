@@ -587,7 +587,10 @@ async function main() {
   };
   combinedPlugin.bluetooth = { getDeviceInfo: async function () { return { connected: true }; } };
   combinedPlugin.bluetoothVolume = { setVolume: async function (deviceId, value) { combinedDeviceVolume = value; } };
-  combinedPlugin.codecManager = { normalize: function (value) { return String(value).toUpperCase(); } };
+  combinedPlugin.codecManager = {
+    normalize: function (value) { return String(value).toUpperCase(); },
+    displayName: function (value) { return value; }
+  };
   var combinedRefreshes = 0;
   combinedPlugin.refreshUI = async function () { combinedRefreshes += 1; };
   await combinedPlugin.saveBluetoothSoundSettings({
@@ -598,6 +601,67 @@ async function main() {
   assert.strictEqual(JSON.parse(combinedSettings.codecPreferences)['34:DF:2A:4F:74:F5'], 'APTX',
     'Bluetooth sound save must store the per-device codec preference');
   assert.strictEqual(combinedRefreshes, 1, 'Bluetooth sound save must refresh displayed device settings once');
+
+  var activeSoundCalls = [];
+  var activeSoundToast = '';
+  var activeSoundSettings = {
+    preferredDeviceMac: 'F4:0E:11:76:9C:D8',
+    codecPreferences: '{"F4:0E:11:76:9C:D8":"APTX"}',
+    outputEnabled: true
+  };
+  var activeSoundPlugin = new WirelessOutputManager({ coreCommand: {}, logger: {}, configManager: {} });
+  activeSoundPlugin.btLog = { info: function () {}, warn: function () {}, error: function () {} };
+  activeSoundPlugin.config = {
+    get: function (key) { return activeSoundSettings[key]; },
+    set: function (key, value) { activeSoundSettings[key] = value; }
+  };
+  activeSoundPlugin._toast = function (level, message) { activeSoundToast = message; };
+  activeSoundPlugin._withPreservedSoftwareVolume = function (operation) {
+    activeSoundCalls.push('volume-safety');
+    return Promise.resolve().then(operation);
+  };
+  activeSoundPlugin._stopPlaybackForRouting = async function () { activeSoundCalls.push('stop'); };
+  activeSoundPlugin._ensureBluetoothAudioTransport = async function () { activeSoundCalls.push('transport'); };
+  activeSoundPlugin.bluetooth = { getDeviceInfo: async function () { return { connected: true }; } };
+  activeSoundPlugin.codecManager = {
+    normalize: function (value) { return String(value || 'AUTO').toUpperCase(); },
+    displayName: function (value) { return value === 'APTX-HD' ? 'aptX HD' : value; },
+    select: async function (deviceId, codec) {
+      activeSoundCalls.push('codec-' + codec);
+      return { activeCodec: codec };
+    }
+  };
+  activeSoundPlugin.bluetoothVolume = {
+    setVolume: async function (deviceId, value) {
+      activeSoundCalls.push('volume-' + value);
+      return { maximum: value };
+    },
+    applySafetyCap: async function () {
+      activeSoundCalls.push('safety-cap');
+      return { volume: { maximum: 10 } };
+    }
+  };
+  activeSoundPlugin.refreshUI = async function () { activeSoundCalls.push('refresh'); };
+  var activeSoundResult = await activeSoundPlugin.saveBluetoothSoundSettings({
+    preferredCodec: [{ value: { value: 'aptX-HD' } }],
+    bluetoothDeviceVolume: '35'
+  });
+  assert.deepStrictEqual(activeSoundCalls,
+    ['volume-safety', 'stop', 'transport', 'codec-APTX-HD', 'volume-35', 'refresh'],
+    'an active codec change must stop playback, switch the codec and apply the explicit stream volume without rerouting');
+  assert.strictEqual(activeSoundResult.playbackStopped, true);
+  assert.strictEqual(activeSoundResult.volume, 35);
+  assert.strictEqual(JSON.parse(activeSoundSettings.codecPreferences)['F4:0E:11:76:9C:D8'], 'APTX-HD');
+  assert(/aptX HD is active at 35%.*Press Play/.test(activeSoundToast),
+    'an active codec change must explain the resulting codec, volume and playback state');
+
+  activeSoundCalls = [];
+  await activeSoundPlugin.saveBluetoothSoundSettings({
+    preferredCodec: [{ value: { value: 'aptX-HD' } }],
+    bluetoothDeviceVolume: '40'
+  });
+  assert.deepStrictEqual(activeSoundCalls, ['volume-40', 'refresh'],
+    'a volume-only change must apply live without stopping playback or reselecting the codec');
 
   var recoveryMac = '34:09:C9:B0:39:B6';
   var recoveryCalls = [];
@@ -867,6 +931,10 @@ async function main() {
   await plugin.getUIConfig();
   assert(/Music output: the default device/.test(uiWrites['sections[0].description']),
     'current output status must remain visible for a saved device');
+  assert(/three points.*Volumio volume.*Bluetooth stream volume.*own volume/i.test(uiWrites['sections[0].description']),
+    'the first section must explain all three Bluetooth loudness controls');
+  assert(/Keep headphones off your head/i.test(uiWrites['sections[0].description']),
+    'the first section must show the headphones setup safety warning');
   assert.strictEqual(uiWrites['sections[3].content[0].hidden'], true, 'reconnect must hide while connected');
   assert.strictEqual(uiWrites['sections[3].content[1].hidden'], false, 'disconnect must show while connected');
   assert(uiWrites['sections[2].content[0].options'].some(function (option) {

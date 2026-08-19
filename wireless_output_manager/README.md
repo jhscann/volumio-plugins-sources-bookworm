@@ -14,7 +14,7 @@ The current version has been tested on:
 - manual switching between the JBL speaker and an iFi USB DAC;
 - reconnect, plugin-only reset, reinstall and uninstall workflows.
 
-Other Volumio 4 devices, Bluetooth speakers and audio configurations remain untested. The plugin deliberately does not install or replace the system audio stack. LDAC has been validated with Soundcore P31i earbuds; aptX and aptX HD support remain experimental pending real-device testing.
+Other Volumio 4 devices, Bluetooth speakers and audio configurations remain untested. The plugin deliberately does not install or replace the system audio stack. LDAC has been validated with Soundcore P31i earbuds, standard aptX with KEF Porsche Design Space One Wireless headphones, and aptX HD with Yamaha YH-E700A headphones.
 
 ## What works
 
@@ -36,6 +36,7 @@ The plugin does **not** install or replace BlueALSA, PulseAudio or PipeWire and 
 
 ## Important limitations
 
+- **Listening safety:** Bluetooth loudness may be controlled at three points: Volumio volume when its software mixer is enabled, BlueALSA's Bluetooth stream volume, and the receiving speaker or headphones' own volume. Keep headphones off your head until routing, codec and stream-volume setup is complete and you have confirmed a safe level.
 - Audio routing is currently implemented only for an existing BlueALSA installation. Pairing and diagnostics may work on PulseAudio or PipeWire systems, but this version will not configure their audio routing.
 - Switching audio destinations stops playback. Wait for the switch to complete, then press Play. The current track restarts from the beginning.
 - Switching may take several seconds while MPD releases and reopens its audio device.
@@ -52,7 +53,7 @@ Connect to the Volumio device over SSH, then run:
 
 ```bash
 cd /tmp
-git clone --branch feat/wireless-output-manager --single-branch \
+git clone --branch feat/wireless-output-codecs --single-branch \
   https://github.com/jhscann/volumio-plugins-sources-bookworm.git \
   wireless-output-manager-src
 cd /tmp/wireless-output-manager-src/wireless_output_manager
@@ -121,10 +122,11 @@ The codec preference is saved separately for each Bluetooth audio device. Connec
 
 - **Automatic — best available** chooses LDAC first, then aptX HD, AAC, aptX and SBC from the codecs mutually reported for that connection;
 - choosing **LDAC**, **aptX HD**, **AAC**, **aptX** or **SBC** explicitly requires that codec and fails clearly rather than silently falling back;
-- the selected codec is applied and verified when you choose **Play through selected Bluetooth device**;
+- on the default output, **Apply codec and volume** saves the codec preference for the next Bluetooth connection;
+- while Bluetooth output is active, **Apply codec and volume** stops playback, changes and verifies the codec immediately, applies the stream volume entered in the same form, and keeps Bluetooth selected. Press Play afterward; there is no need to return to the default output or select Bluetooth output again;
 - before a manual routing change, the plugin captures Volumio's volume and mute state, then temporarily mutes at 0%. After configuring the output and codec, it uses BlueALSA's device-scoped mixer to cap only the selected Bluetooth stream at 10%; it never raises a stream already below the cap. The saved Volumio state is restored before routing completes, although Volumio's native Bluetooth handler may subsequently display 100% when playback opens the A2DP transport.
 
-When the selected device is connected, **Bluetooth sound → Bluetooth stream volume** controls BlueALSA's local digital gain. It is not necessarily the speaker or headphones' physical volume, and physical buttons may change a separate level. Choose **Apply Bluetooth sound settings** after changing the stream volume or codec preference. If Volumio displays 100% after Bluetooth playback starts, use Bluetooth stream volume and the device's own controls for Bluetooth loudness.
+When the selected device is connected, **Bluetooth sound → Bluetooth stream volume** controls BlueALSA's local digital gain. It is not necessarily the speaker or headphones' physical volume, and physical buttons may change a separate level. A normal switch to Bluetooth starts at 10% for safety. When a codec change is applied on the active Bluetooth output, the explicit stream volume entered alongside it is respected instead of being reset to 10%. Changing only the stream volume applies live without stopping playback. If Volumio displays 100% after Bluetooth playback starts, use Bluetooth stream volume and the device's own controls for Bluetooth loudness.
 
 Only codecs reported by the current connection are offered in the selector. Some headphones require their high-quality codec mode to be enabled in the manufacturer's app before they advertise LDAC. LDAC can consume more battery and may be less stable in a congested 2.4 GHz environment; select SBC if reliability is more important than bitrate. aptX Adaptive itself is not available, although an aptX Adaptive device may expose standard aptX or aptX HD as a backward-compatible connection.
 
