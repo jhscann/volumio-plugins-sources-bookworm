@@ -16,6 +16,7 @@ function printable(receiver) {
     id: receiver.id,
     name: receiver.name,
     address: receiver.address,
+    addresses: receiver.addresses,
     protocols: receiver.protocols,
     airplayPort: receiver.airplay ? receiver.airplay.port : null,
     raopPort: receiver.raop ? receiver.raop.port : null,
@@ -48,6 +49,7 @@ async function main() {
     console.error('Sending a quiet test tone to ' + receiver.name +
       '. Keep headphones off until its level is confirmed.');
     var result = await prototype.playTestTone(receiver, {
+      address: option('--address', ''),
       volume: option('--volume', 5),
       seconds: option('--seconds', 3),
       frequency: option('--frequency', 440)
@@ -55,7 +57,8 @@ async function main() {
     console.log(JSON.stringify(result, null, 2));
     return;
   }
-  throw new Error('Usage: airplay-prototype.js discover|check|tone --device <name-or-id> [--volume 0-15] [--seconds 1-10]');
+  throw new Error('Usage: airplay-prototype.js discover|check|tone --device <name-or-id> ' +
+    '[--address <advertised-ip>] [--volume 0-15] [--seconds 1-10]');
 }
 
 main().catch(function (error) {

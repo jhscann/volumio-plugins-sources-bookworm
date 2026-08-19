@@ -134,7 +134,10 @@ MdnsDiscovery.prototype._recordsToServices = function (records, serviceTypes) {
       if (ptr[name].indexOf(record.data) === -1) ptr[name].push(record.data);
     } else if (record.type === 33) srv[name] = record.data;
     else if (record.type === 16) txt[name] = record.data;
-    else if (record.type === 1) addresses[name] = record.data;
+    else if (record.type === 1) {
+      if (!addresses[name]) addresses[name] = [];
+      if (addresses[name].indexOf(record.data) === -1) addresses[name].push(record.data);
+    }
   });
   var services = [];
   serviceTypes.forEach(function (serviceType) {
@@ -148,16 +151,18 @@ MdnsDiscovery.prototype._recordsToServices = function (records, serviceTypes) {
       var serviceName = instanceKey.endsWith(suffix)
         ? instance.slice(0, instance.length - suffix.length)
         : instance;
-      services.push({
-        interface: 'mdns',
-        family: 'IPv4',
-        serviceName: serviceName,
-        serviceType: serviceType,
-        domain: 'local',
-        hostname: endpoint.target,
-        address: addresses[targetKey] || '',
-        port: endpoint.port,
-        txt: txt[instanceKey] || {}
+      (addresses[targetKey] || []).forEach(function (address) {
+        services.push({
+          interface: 'mdns',
+          family: 'IPv4',
+          serviceName: serviceName,
+          serviceType: serviceType,
+          domain: 'local',
+          hostname: endpoint.target,
+          address: address,
+          port: endpoint.port,
+          txt: txt[instanceKey] || {}
+        });
       });
     });
   });
@@ -208,4 +213,3 @@ module.exports = {
   parsePacket: parsePacket,
   readName: readName
 };
-

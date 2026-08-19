@@ -61,6 +61,17 @@ AirPlayPrototype.prototype.findReceiver = function (receivers, selector) {
   throw new Error('AirPlay receiver not found: ' + selector);
 };
 
+AirPlayPrototype.prototype.selectReceiverAddress = function (receiver, requestedAddress) {
+  var requested = String(requestedAddress || '').trim();
+  if (!requested) return receiver;
+  var advertised = receiver.addresses && receiver.addresses.length
+    ? receiver.addresses : [receiver.address];
+  if (advertised.indexOf(requested) === -1) {
+    throw new Error('Address ' + requested + ' was not advertised by ' + receiver.name);
+  }
+  return Object.assign({}, receiver, { address: requested });
+};
+
 AirPlayPrototype.prototype._openCommandPipe = function (pipePath) {
   return new Promise(function (resolve, reject) {
     fs.open(pipePath, 'w', function (error, descriptor) {
@@ -73,6 +84,7 @@ AirPlayPrototype.prototype._openCommandPipe = function (pipePath) {
 AirPlayPrototype.prototype.playTestTone = async function (receiver, options) {
   var self = this;
   options = options || {};
+  receiver = self.selectReceiverAddress(receiver, options.address);
   var volume = Number(options.volume === undefined ? 5 : options.volume);
   if (!Number.isFinite(volume) || volume < 0 || volume > 15) {
     throw new Error('Prototype receiver volume must be between 0 and 15%');

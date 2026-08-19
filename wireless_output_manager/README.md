@@ -239,6 +239,16 @@ node scripts/airplay-prototype.js tone \
   --seconds 3
 ```
 
+Discovery retains every IPv4 address advertised by a multi-homed receiver. During diagnosis, a specific advertised path can be selected without changing the receiver identity:
+
+```bash
+node scripts/airplay-prototype.js tone \
+  --device "AA:BB:CC:DD:EE:FF" \
+  --address "192.168.1.51" \
+  --volume 5 \
+  --seconds 3
+```
+
 Keep headphones off until the receiver's actual level is known. The prototype refuses levels above 15%. AirPlay receiver volume is separate from Volumio software volume and any physical amplifier or headphone volume.
 
 The test requires a receiver on the same discoverable network and free access to the ports required by that receiver. Native AirPlay 2 receivers may use PTP timing on UDP 319 and 320. This prototype does not grant capabilities, open firewall ports, install packages, save pairing credentials or attempt multi-room playback. PIN-protected Apple receivers are therefore outside this first test.

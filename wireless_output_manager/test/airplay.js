@@ -45,6 +45,12 @@ async function main() {
   assert.strictEqual(receivers.length, 1, 'AirPlay and RAOP records for one device must merge');
   assert.deepStrictEqual(receivers[0].protocols, ['airplay2', 'raop']);
   assert.strictEqual(receivers[0].name, 'Living Room');
+  assert.deepStrictEqual(receivers[0].addresses, ['192.168.1.50']);
+
+  var alternateRecord = Object.assign({}, records[0], { address: '192.168.1.51' });
+  var multihomed = adapter.mergeRecords(records.concat([alternateRecord]));
+  assert.deepStrictEqual(multihomed[0].addresses, ['192.168.1.50', '192.168.1.51'],
+    'all advertised addresses for a multi-homed receiver must be retained');
 
   var args = adapter.buildSenderArgs(receivers[0], '/tmp/wom-airplay-test', 5, '192.168.1.10');
   assert.strictEqual(args[args.indexOf('--protocol') + 1], 'auto');
@@ -83,6 +89,11 @@ async function main() {
   assert.strictEqual(prototype.findReceiver(receivers, 'living room').id, 'AA:BB:CC:DD:EE:FF');
   assert.strictEqual(prototype.findReceiver(receivers, 'AA:BB').name, 'Living Room');
   assert.throws(function () { prototype.findReceiver(receivers, 'Kitchen'); }, /not found/);
+  assert.strictEqual(prototype.selectReceiverAddress(multihomed[0], '192.168.1.51').address,
+    '192.168.1.51');
+  assert.throws(function () {
+    prototype.selectReceiverAddress(multihomed[0], '192.168.1.99');
+  }, /was not advertised/);
 
   var tone = generateTone({ seconds: 2, frequency: 440, amplitude: 0.01 });
   assert.strictEqual(tone.pcm.length, 44100 * 2 * 4, 'tone must be 44.1 kHz, 16-bit stereo');

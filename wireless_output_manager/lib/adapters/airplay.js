@@ -103,6 +103,7 @@ AirPlayAdapter.prototype.mergeRecords = function (records) {
         id: id,
         name: record.txt.name || String(record.serviceName || '').replace(/^[^@]+@/, ''),
         address: record.address,
+        addresses: [],
         hostname: record.hostname,
         interface: record.interface,
         protocols: [],
@@ -113,6 +114,9 @@ AirPlayAdapter.prototype.mergeRecords = function (records) {
     } else if (id.indexOf(':') !== -1 && device.id.indexOf(':') === -1) {
       device.id = id;
     }
+    if (record.address && device.addresses.indexOf(record.address) === -1) {
+      device.addresses.push(record.address);
+    }
     if (record.serviceType === '_airplay._tcp') {
       if (!device.airplay || record.family === 'IPv4') device.airplay = record;
       if (device.protocols.indexOf('airplay2') === -1) device.protocols.push('airplay2');
@@ -121,7 +125,7 @@ AirPlayAdapter.prototype.mergeRecords = function (records) {
       if (!device.raop || record.family === 'IPv4') device.raop = record;
       if (device.protocols.indexOf('raop') === -1) device.protocols.push('raop');
     }
-    if (!device.address || record.family === 'IPv4') device.address = record.address;
+    if (!device.address) device.address = record.address;
   });
   return devices.sort(function (left, right) {
     return left.name.localeCompare(right.name);
