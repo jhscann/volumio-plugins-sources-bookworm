@@ -4,7 +4,9 @@
   "description": "Manage wireless audio outputs in Volumio 4, starting with Bluetooth speakers",
   "main": "index.js",
   "scripts": {
-    "test": "node test/run.js"
+    "test": "node test/run.js && node test/airplay.js",
+    "airplay:discover": "node scripts/airplay-prototype.js discover",
+    "airplay:check": "node scripts/airplay-prototype.js check"
   },
   "author": "John Cann",
   "license": "MIT",

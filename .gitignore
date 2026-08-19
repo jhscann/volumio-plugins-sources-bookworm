@@ -1,5 +1,6 @@
 # Dependencies
 wireless_output_manager/node_modules/
+wireless_output_manager/bin/airplay/
 
 # Logs
 *.log
