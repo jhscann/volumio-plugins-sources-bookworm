@@ -37,15 +37,16 @@ function generateTone(options) {
   return { pcm: output, seconds: seconds, sampleRate: sampleRate, amplitude: amplitude };
 }
 
-function ffmpegFileArgs(filePath, seconds) {
-  return [
-    '-hide_banner', '-loglevel', 'error', '-nostdin',
+function ffmpegFileArgs(filePath, seconds, seek) {
+  var args = ['-hide_banner', '-loglevel', 'error', '-nostdin'];
+  if (seek > 0) args.push('-ss', String(seek));
+  return args.concat([
     '-i', filePath,
     '-t', String(seconds),
     '-vn', '-sn', '-dn',
     '-f', 's16le', '-acodec', 'pcm_s16le',
     '-ar', '44100', '-ac', '2', 'pipe:1'
-  ];
+  ]);
 }
 
 function AirPlayPrototype(options) {
@@ -92,10 +93,10 @@ AirPlayPrototype.prototype._openCommandPipe = function (pipePath) {
   });
 };
 
-AirPlayPrototype.prototype._decodeAudioFile = function (filePath, seconds) {
+AirPlayPrototype.prototype._decodeAudioFile = function (filePath, seconds, seek) {
   var self = this;
   return new Promise(function (resolve, reject) {
-    var child = self.spawn('ffmpeg', ffmpegFileArgs(filePath, seconds), {
+    var child = self.spawn('ffmpeg', ffmpegFileArgs(filePath, seconds, seek), {
       stdio: ['ignore', 'pipe', 'pipe']
     });
     var chunks = [];
@@ -252,6 +253,10 @@ AirPlayPrototype.prototype.playAudioFile = async function (receiver, filePath, o
   if (!Number.isFinite(seconds) || seconds < 1 || seconds > 10) {
     throw new Error('Prototype file excerpt must be between 1 and 10 seconds');
   }
+  var seek = Number(options.seek === undefined ? 0 : options.seek);
+  if (!Number.isFinite(seek) || seek < 0 || seek > 3600) {
+    throw new Error('Prototype file start position must be between 0 and 3600 seconds');
+  }
   var resolvedPath = path.resolve(String(filePath || ''));
   var details;
   try {
@@ -260,7 +265,7 @@ AirPlayPrototype.prototype.playAudioFile = async function (receiver, filePath, o
     throw new Error('Selected audio file was not found: ' + resolvedPath);
   }
   if (!details.isFile()) throw new Error('Selected audio source is not a regular file');
-  var audio = await this._decodeAudioFile(resolvedPath, seconds);
+  var audio = await this._decodeAudioFile(resolvedPath, seconds, seek);
   return this._playPcm(receiver, audio, Object.assign({}, options, {
     title: path.basename(resolvedPath),
     artist: 'Volumio AirPlay file test'

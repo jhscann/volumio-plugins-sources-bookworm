@@ -65,13 +65,15 @@ async function main() {
     var fileResult = await prototype.playAudioFile(fileReceiver, option('--file', ''), {
       address: option('--address', ''),
       volume: option('--volume', 5),
+      seek: option('--seek', 0),
       seconds: option('--seconds', 5)
     });
     console.log(JSON.stringify(fileResult, null, 2));
     return;
   }
   throw new Error('Usage: airplay-prototype.js discover|check|tone|file --device <name-or-id> ' +
-    '[--address <advertised-ip>] [--volume 0-15] [--amplitude 0.001-0.1] [--seconds 1-10]');
+    '[--address <advertised-ip>] [--volume 0-15] [--amplitude 0.001-0.1] ' +
+    '[--seek 0-3600] [--seconds 1-10]');
 }
 
 main().catch(function (error) {

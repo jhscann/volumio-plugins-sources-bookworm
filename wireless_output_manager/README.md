@@ -260,6 +260,7 @@ node scripts/airplay-prototype.js file \
   --device "AA:BB:CC:DD:EE:FF" \
   --file "/var/lib/mpd/music/NAS/example.flac" \
   --volume 5 \
+  --seek 60 \
   --seconds 5
 ```
 

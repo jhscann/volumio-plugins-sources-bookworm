@@ -104,9 +104,10 @@ async function main() {
   }
   assert(maximum <= Math.ceil(32767 * 0.01), 'test tone amplitude must remain bounded');
 
-  var decodeArgs = ffmpegFileArgs('/music/test.flac', 5);
+  var decodeArgs = ffmpegFileArgs('/music/test.flac', 5, 60);
   assert.strictEqual(decodeArgs[decodeArgs.indexOf('-i') + 1], '/music/test.flac');
   assert.strictEqual(decodeArgs[decodeArgs.indexOf('-t') + 1], '5');
+  assert.strictEqual(decodeArgs[decodeArgs.indexOf('-ss') + 1], '60');
   assert.strictEqual(decodeArgs[decodeArgs.indexOf('-f') + 1], 's16le');
   assert.strictEqual(decodeArgs[decodeArgs.indexOf('-ar') + 1], '44100');
   assert.strictEqual(decodeArgs[decodeArgs.indexOf('-ac') + 1], '2');
