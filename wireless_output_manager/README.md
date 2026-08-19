@@ -19,7 +19,7 @@ Other Volumio 4 devices, Bluetooth speakers and audio configurations remain unte
 ## What works
 
 - Bluetooth speaker discovery, pairing, trust, connection and disconnection;
-- a simple onboarding flow: search, select, then use the selected speaker;
+- a guarded onboarding flow: search, select, then wait for a real A2DP audio stream before the device is accepted;
 - a saved preferred speaker with optional automatic reconnection;
 - explicit switching between the Bluetooth speaker and Volumio's normal audio output;
 - read-only environment, Bluetooth, ALSA, audio-stack and MPD diagnostics;
@@ -30,7 +30,9 @@ Other Volumio 4 devices, Bluetooth speakers and audio configurations remain unte
 - runtime resolution of a paired speaker's owning Bluetooth controller, including systems where `hci0` and `hci1` change across reboots.
 - automatic or explicit per-device codec selection for speakers, headphones and earbuds, using codecs shared by BlueALSA and the connected device;
 - guarded LDAC, aptX and aptX HD enablement when the installed BlueALSA build already contains the corresponding encoders.
-- one bounded, selected-device reconnect when BlueZ reports a connection but BlueALSA has no usable audio stream, such as immediately after the codec service is restarted;
+- bounded A2DP readiness checks, a targeted audio-profile request and at most one selected-device reconnect when BlueZ reports a connection but BlueALSA has no usable audio stream;
+- foreground pairing and routing operations that pause automatic reconnect attempts, preventing competing connection requests;
+- handled Bluetooth command failures that remain inside the plugin instead of restarting the Volumio service process;
 
 The plugin does **not** install or replace BlueALSA, PulseAudio or PipeWire and does **not** edit `/etc/mpd.conf` directly. On a compatible BlueALSA installation it adds one plugin-owned systemd drop-in that enables the already-installed LDAC, aptX and aptX HD codecs. The existing service command and profiles are preserved, the result is verified, and a failed change is rolled back.
 
@@ -64,7 +66,7 @@ Confirm the warning for manually installed, unverified plugins. After installati
 
 During installation, a compatible BlueALSA service is restarted once to enable its existing LDAC, aptX and aptX HD encoders. Only codecs present in the installed BlueALSA build are enabled. Bluetooth devices may disconnect briefly and can then be reconnected normally. SBC remains available. If the requested codecs cannot be verified, the installer restores the previous service configuration and the plugin continues with the codecs already provided by the system.
 
-If BlueZ retains a stale connected state after that restart but no Bluetooth audio stream exists, the first **Play through selected Bluetooth device** request performs one bounded reconnect of the selected device on its owning adapter. It does not restart Bluetooth, change the default adapter or touch unrelated devices.
+If BlueZ reports a connection but no Bluetooth audio stream exists, the plugin first waits for the stream to settle, then requests the exact A2DP profile and performs at most one bounded reconnect of the selected device on its owning adapter. It does not restart Bluetooth, change the default adapter or touch unrelated devices.
 
 The `/tmp/wireless-output-manager-src` checkout may disappear after a reboot. That does not remove the installed plugin. Clone it again if you later need a fresh source checkout.
 
@@ -85,11 +87,11 @@ If the source checkout no longer exists, repeat the installation commands above 
 
 ## Set up a Bluetooth audio device
 
-1. Put a new speaker, headphones or earbuds in pairing mode. A device already paired with this Volumio system normally only needs to be switched on.
+1. Put a new speaker, headphones or earbuds in pairing mode. Keep its pairing indicator active until **Select and connect** confirms that audio is ready. Some devices may leave their connectable state after saving the bond and require their Bluetooth button to be pressed again. A device already paired with this Volumio system normally only needs to be switched on.
 2. Open **Plugins → Wireless Output Manager**.
 3. Under **Bluetooth devices**, select **Search for devices** and wait approximately 12 seconds.
 4. Choose the device under **Available audio devices**.
-5. Select **Select and connect**. The plugin powers on Bluetooth, pairs when necessary, trusts, connects and saves the device. It does not change the music output yet.
+5. Select **Select and connect**. The plugin powers on Bluetooth, pairs when necessary, trusts and connects the device, then waits until BlueALSA exposes its A2DP audio stream. This can take several seconds. The device is saved only after audio is genuinely ready; music output does not change yet.
 6. Under **Current output**, select **Play through selected Bluetooth device**.
 7. Wait for the route change to finish, then press Play.
 8. Bluetooth stream volume starts at no more than 10% for safety. Increase it gradually under **Bluetooth sound** after playback begins.
@@ -97,14 +99,18 @@ If the source checkout no longer exists, repeat the installation commands above 
 The speaker list shows the state BlueZ currently reports:
 
 - **selected**: the speaker saved by this plugin;
-- **connected**: an active Bluetooth connection exists;
+- **connected**: a base Bluetooth connection exists;
 - **paired**: the system pairing is preserved;
-- **audio**: BlueZ has confirmed a supported audio profile;
+- **audio-capable**: BlueZ has confirmed that the device advertises a supported audio profile; this describes capability, not current stream readiness;
 - **unidentified device**: BlueZ has not exposed enough profile information yet.
 
 Devices positively identified as non-audio are hidden from the speaker list. Unidentified devices remain visible because some speakers reveal their audio profile only after pairing. If more than one audio speaker is connected, the status text names them and explains how to resolve the conflict.
 
 Device selection and audio routing are intentionally separate. **Select and connect** establishes which single Bluetooth audio device is connected and saved. **Play through selected Bluetooth device** then routes Volumio playback to it. This keeps destination changes explicit and avoids automatic fallback or routing surprises.
+
+The Play-through button appears only after the selected device has a real BlueALSA A2DP stream. If BlueZ connects first while audio is still starting, the settings page says **preparing audio** and offers **Reconnect selected device**. A pairing can be preserved even when its audio connection fails; keep the device in pairing mode and select **Select and connect** again. The plugin does not report that onboarding succeeded merely because BlueZ says `Connected: yes`.
+
+Some devices, including the tested JBL Clip 3, may successfully save a pairing but stop answering normal connection requests before A2DP is ready. If the pairing is shown as saved but audio is not ready, press the device's Bluetooth button so its pairing indicator flashes, then select **Select and connect** again. The plugin cannot activate a receiver's physical pairing/connectable mode itself.
 
 To return to the output already selected in Volumio Playback Options, choose **Return to default audio output**, wait for the switch to finish, then press Play. This recovery control remains available even when no Bluetooth device is connected.
 
@@ -130,9 +136,9 @@ When the selected device is connected, **Bluetooth sound → Bluetooth stream vo
 
 Only codecs reported by the current connection are offered in the selector. Some headphones require their high-quality codec mode to be enabled in the manufacturer's app before they advertise LDAC. LDAC can consume more battery and may be less stable in a congested 2.4 GHz environment; select SBC if reliability is more important than bitrate. aptX Adaptive itself is not available, although an aptX Adaptive device may expose standard aptX or aptX HD as a backward-compatible connection.
 
-To use a different device, choose it under **Bluetooth devices** and select **Select and connect**. The plugin returns active Bluetooth routing to the default output, disconnects other connected devices that BlueZ confirms are audio devices, and connects the new selection. All pairings are preserved, and confirmed non-audio Bluetooth devices are not touched. The existing selection is replaced only after the new device connects successfully. Choose **Play through selected Bluetooth device** afterward when you are ready to route music to it.
+To use a different device, first select **Return to default audio output** and wait for that change to finish. Then choose the other device under **Bluetooth devices**, select **Select and connect**, and finally choose **Play through selected Bluetooth device** when ready. Press Play afterward. Live Bluetooth-device handover is deliberately blocked because it is slow and unreliable across receivers. All pairings are preserved, and confirmed non-audio Bluetooth devices are not touched.
 
-Before changing a working connection, the plugin first confirms that the newly selected device can connect. If it is switched off or unavailable, the current speaker, saved selection and audio route are left unchanged and the UI asks you to turn on the selected device and try again.
+After playback has returned to the default output, the plugin confirms that the newly selected device can connect before replacing the saved selection. If it is switched off or unavailable, the existing selection and default audio route are preserved and the UI explains how to retry.
 
 ## Diagnostics
 

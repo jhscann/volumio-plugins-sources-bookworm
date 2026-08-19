@@ -6,6 +6,7 @@ var AUDIO_UUIDS = [
   '0000110d-0000-1000-8000-00805f9b34fb',
   '0000110e-0000-1000-8000-00805f9b34fb'
 ];
+var AUDIO_SINK_UUID = '0000110b-0000-1000-8000-00805f9b34fb';
 var DEVICE_PATH_RE = /^\/org\/bluez\/(hci[^/]+)\/dev_([0-9A-F_]{17})$/i;
 
 function BluetoothAdapter(options) {
@@ -242,6 +243,19 @@ BluetoothAdapter.prototype.connect = function (id) {
     return result;
   }).finally(function () { delete self.connectAttempts[mac]; });
   return self.connectAttempts[mac];
+};
+BluetoothAdapter.prototype.connectAudioProfile = function (id) {
+  var self = this;
+  var mac = self._mac(id);
+  return self.resolveDevice(mac).then(function (device) {
+    return self._bus([
+      'call', 'org.bluez', device.objectPath, 'org.bluez.Device1',
+      'ConnectProfile', 's', AUDIO_SINK_UUID
+    ], 20000).then(function (result) {
+      result.device = device;
+      return result;
+    });
+  });
 };
 BluetoothAdapter.prototype.disconnect = function (id) { return this._callDevice(id, 'Disconnect', 20000); };
 BluetoothAdapter.prototype.forget = async function (id) {

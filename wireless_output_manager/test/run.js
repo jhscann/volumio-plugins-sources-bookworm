@@ -227,6 +227,13 @@ async function main() {
     'speaker connection must not operate on the Surface Dial object');
 
   busCalls = [];
+  await multiAdapter.connectAudioProfile(speakerMac);
+  var profileCall = busCalls.find(function (call) { return call.args.indexOf('ConnectProfile') !== -1; });
+  assert(profileCall, 'A2DP readiness recovery must request the audio sink profile');
+  assert.strictEqual(profileCall.args[3], builtInPath, 'audio profile recovery must target the resolved speaker object');
+  assert.strictEqual(profileCall.args.indexOf(usbDialPath), -1, 'audio profile recovery must not touch the Surface Dial');
+
+  busCalls = [];
   await multiAdapter.forget(speakerMac);
   var forgetCall = busCalls.find(function (call) { return call.args.indexOf('RemoveDevice') !== -1; });
   assert(forgetCall, 'forget must call Adapter1.RemoveDevice');
@@ -310,7 +317,7 @@ async function main() {
   assert.deepStrictEqual(speakerOptions.map(function (device) { return device.id; }), [
     'AA:BB:CC:DD:EE:01', 'AA:BB:CC:DD:EE:02', 'AA:BB:CC:DD:EE:03'
   ], 'speaker options must prioritize selected and connected audio devices, retain unidentified devices and hide known non-audio devices');
-  assert.strictEqual(optionPlugin._speakerOptionLabel(speakerOptions[0], 'AA:BB:CC:DD:EE:01'), 'Living Room — selected, paired, audio');
+  assert.strictEqual(optionPlugin._speakerOptionLabel(speakerOptions[0], 'AA:BB:CC:DD:EE:01'), 'Living Room — selected, paired, audio-capable');
   assert.strictEqual(optionPlugin._speakerOptionLabel(speakerOptions[2], 'AA:BB:CC:DD:EE:01'), 'AA:BB:CC:DD:EE:03 — unidentified device');
   optionPlugin._setPreferredCodecFor('AA:BB:CC:DD:EE:01', 'LDAC');
   optionPlugin._setPreferredCodecFor('AA:BB:CC:DD:EE:02', 'SBC');
@@ -526,9 +533,11 @@ async function main() {
     routeCalls.push('safety-cap');
     throw new Error('unsafe device volume');
   };
-  await assert.rejects(routePlugin.createBluetoothOutput(), /routing returned to the default output/,
-    'unsafe Bluetooth device volume must fail closed');
-  assert.deepStrictEqual(routeCalls, ['stop', 'transport', 'codec', 'output', 'safety-cap', 'rollback']);
+  var unsafeRouteResult = await routePlugin.createBluetoothOutput();
+  assert.strictEqual(unsafeRouteResult.success, false, 'unsafe Bluetooth device volume must return a handled failure');
+  assert(/routing returned to the default output/.test(unsafeRouteResult.error),
+    'unsafe Bluetooth device volume must explain its fail-closed rollback');
+  assert.deepStrictEqual(routeCalls, ['stop', 'transport', 'codec', 'output', 'safety-cap', 'rollback', 'refresh']);
   assert.strictEqual(routeState.outputEnabled, false, 'failed device-volume safety must leave default routing active');
 
   var uiDeviceVolume = null;
@@ -684,6 +693,7 @@ async function main() {
       recoveryCalls.push('info-' + id);
       return { id: id, connected: true, adapterAddress: '3C:78:95:C9:CC:29' };
     },
+    connectAudioProfile: async function (id) { recoveryCalls.push('profile-' + id); },
     disconnect: async function (id) { recoveryCalls.push('disconnect-' + id); },
     connect: async function (id) { recoveryCalls.push('connect-' + id); }
   };
@@ -692,10 +702,10 @@ async function main() {
     recoveryPlugin._ensureBluetoothAudioTransport(recoveryMac)
   ]);
   assert.strictEqual(recovered[0].deviceConnected, true, 'stale connected devices must recover a BlueALSA PCM');
-  assert.strictEqual(recoveryCalls.filter(function (call) { return call === 'disconnect-' + recoveryMac; }).length, 1,
-    'concurrent stale-transport recovery must disconnect only the selected device once');
-  assert.strictEqual(recoveryCalls.filter(function (call) { return call === 'connect-' + recoveryMac; }).length, 1,
-    'concurrent stale-transport recovery must reconnect only the selected device once');
+  assert.strictEqual(recoveryCalls.filter(function (call) { return call === 'disconnect-' + recoveryMac; }).length, 0,
+    'a stream that appears during the readiness wait must not trigger a disconnect');
+  assert.strictEqual(recoveryCalls.filter(function (call) { return call === 'connect-' + recoveryMac; }).length, 0,
+    'a stream that appears during the readiness wait must not trigger a reconnect');
   assert.strictEqual(recoveryCalls.some(function (call) { return call.indexOf('A0:4A:5E:D9:98:F5') !== -1; }), false,
     'stale-transport recovery must not operate on an unrelated Surface Dial');
 
@@ -705,6 +715,22 @@ async function main() {
   };
   await recoveryPlugin._ensureBluetoothAudioTransport(recoveryMac);
   assert.deepStrictEqual(recoveryCalls, [], 'a healthy BlueALSA transport must not trigger any Bluetooth operation');
+
+  recoveryCalls = [];
+  recoveryChecks = 0;
+  recoveryPlugin.transportPollAttempts = 2;
+  recoveryPlugin.codecManager.getStatus = async function () {
+    recoveryChecks += 1;
+    return recoveryChecks < 4
+      ? { available: true, deviceConnected: false, pcmPath: '' }
+      : { available: true, deviceConnected: true, pcmPath: '/org/bluealsa/hci0/dev_34_09_C9_B0_39_B6/a2dpsrc/sink' };
+  };
+  recoveryPlugin.bluetooth.getDeviceInfo = async function () {
+    return { id: recoveryMac, connected: true, adapterAddress: '3C:78:95:C9:CC:29' };
+  };
+  await recoveryPlugin._ensureBluetoothAudioTransport(recoveryMac);
+  assert.deepStrictEqual(recoveryCalls, ['profile-' + recoveryMac],
+    'a connected device with no PCM must receive a targeted A2DP profile request before a full reconnect');
 
   recoveryPlugin.transportPollAttempts = 2;
   recoveryPlugin.codecManager.getStatus = async function () {
@@ -737,7 +763,7 @@ async function main() {
 
   var onboardingCalls = [];
   var onboardingSaved = {};
-  plugin.btLog = { info: function () {}, error: function () {} };
+  plugin.btLog = { info: function () {}, warn: function () {}, error: function () {} };
   plugin.config = {
     get: function (key) { return key === 'autoReconnect' ? false : onboardingSaved[key]; },
     set: function (key, value) { onboardingSaved[key] = value; }
@@ -751,11 +777,32 @@ async function main() {
       return { id: 'C4:30:18:EA:9D:EC', name: 'JBL PartyBox 100', connected: onboardingCalls.indexOf('connect') !== -1 };
     }
   };
+  plugin._ensureBluetoothAudioTransport = async function () { onboardingCalls.push('audio-ready'); };
   plugin.refreshUI = function () { onboardingCalls.push('refresh'); return Promise.resolve(); };
   await plugin.pairAndConnectDevice({ preferredDevice: [{ value: 'C4:30:18:EA:9D:EC', label: 'JBL PartyBox 100' }] });
-  assert.deepStrictEqual(onboardingCalls, ['power', 'pair', 'trust', 'connect', 'refresh']);
+  assert.deepStrictEqual(onboardingCalls, ['power', 'pair', 'trust', 'connect', 'audio-ready', 'refresh']);
   assert.strictEqual(onboardingSaved.preferredDeviceName, 'JBL PartyBox 100');
   assert.strictEqual(onboardingSaved.enabled, true, 'successful onboarding must enable reconnect management');
+
+  onboardingCalls = [];
+  plugin.devices = [{ id: '70:99:1C:4A:CF:18', name: 'JBL Clip 3', audioCapable: null }];
+  plugin.bluetooth.pair = async function () {
+    onboardingCalls.push('pair-failed');
+    throw new Error('bluetoothctl exited with code 1: org.bluez.Error.ConnectionAttemptFailed');
+  };
+  plugin.bluetooth.listDevices = async function () {
+    onboardingCalls.push('reload-devices');
+    return [];
+  };
+  var pairingFailure = await plugin.pairAndConnectDevice({
+    preferredDevice: [{ value: '70:99:1C:4A:CF:18', label: 'JBL Clip 3' }]
+  });
+  assert.strictEqual(pairingFailure.success, false, 'pairing rejection must remain a handled UI result');
+  assert(/Pairing with JBL Clip 3 did not complete.*Search for devices again/.test(pairingFailure.error),
+    'pairing rejection must explain the correct recovery workflow');
+  assert(onboardingCalls.indexOf('reload-devices') !== -1,
+    'a failed pairing must reload BlueZ devices so vanished temporary objects leave the selector');
+  assert.deepStrictEqual(plugin.devices, [], 'a failed pairing must not leave a stale discovered-device option');
 
   var oldId = 'AA:BB:CC:DD:EE:01';
   var newId = 'AA:BB:CC:DD:EE:02';
@@ -780,6 +827,7 @@ async function main() {
     switchCalls.push('default-output');
     switchState.outputEnabled = false;
   };
+  switchPlugin._ensureBluetoothAudioTransport = async function (id) { switchCalls.push('audio-ready-' + id); };
   switchPlugin.refreshUI = function () { switchCalls.push('refresh'); return Promise.resolve(); };
   switchPlugin.bluetooth = {
     powerOn: async function () { switchCalls.push('power'); },
@@ -794,9 +842,19 @@ async function main() {
         : { id: id, name: 'Speaker B', connected: switchCalls.indexOf('connect-' + newId) !== -1 };
     }
   };
+  var blockedSwitch = await switchPlugin.pairAndConnectDevice({ preferredDevice: [{ value: newId, label: 'Speaker B' }] });
+  assert.strictEqual(blockedSwitch.blocked, true, 'live Bluetooth-device handover must be blocked');
+  assert(/Return to the default audio output/.test(blockedSwitch.error),
+    'blocked handover must explain the manual switching workflow');
+  assert.strictEqual(switchCalls.indexOf('connect-' + newId), -1, 'blocked handover must not start a second Bluetooth connection');
+  assert.strictEqual(switchState.preferredDeviceMac, oldId, 'blocked handover must preserve the selected device');
+  assert.strictEqual(switchState.outputEnabled, true, 'blocked handover must preserve the active route');
+
+  await switchPlugin._returnToDefaultIfWireless();
+  switchCalls = [];
   await switchPlugin.pairAndConnectDevice({ preferredDevice: [{ value: newId, label: 'Speaker B' }] });
-  assert(switchCalls.indexOf('connect-' + newId) < switchCalls.indexOf('default-output'), 'new speaker must connect before the working route changes');
-  assert(switchCalls.indexOf('default-output') < switchCalls.indexOf('disconnect-' + oldId), 'speaker switching must return to default before disconnecting the old speaker');
+  assert(switchCalls.indexOf('connect-' + newId) < switchCalls.indexOf('disconnect-' + oldId),
+    'after returning to default, the new speaker must connect before the old speaker disconnects');
   assert.strictEqual(switchState.preferredDeviceMac, newId, 'new speaker must be saved only after it connects');
   assert.strictEqual(switchState.preferredDeviceName, 'Speaker B');
   assert.strictEqual(switchState.outputEnabled, false, 'speaker switching must leave routing on the default output');
@@ -821,20 +879,23 @@ async function main() {
 
   switchState.preferredDeviceMac = oldId;
   switchState.preferredDeviceName = 'Speaker A';
-  switchState.outputEnabled = true;
+  switchState.outputEnabled = false;
   switchCalls = [];
   delete switchPlugin.bluetooth.listDevices;
-  switchPlugin.bluetooth.connect = async function (id) {
-    switchCalls.push('connect-' + id);
-    if (id === newId) throw new Error('connection refused');
+  switchPlugin.bluetooth.connect = async function (id) { switchCalls.push('connect-' + id); };
+  switchPlugin._ensureBluetoothAudioTransport = async function (id) {
+    switchCalls.push('audio-not-ready-' + id);
+    var error = new Error('no BlueALSA PCM');
+    error.userMessage = 'Bluetooth pairing was saved, but the audio connection did not become ready.';
+    throw error;
   };
   var failedResult = await switchPlugin.pairAndConnectDevice({ preferredDevice: [{ value: newId, label: 'Speaker B' }] });
-  assert.strictEqual(failedResult.success, false, 'unavailable speakers must return a handled failure result');
-  assert(/current device and audio route were not changed/.test(failedResult.error), 'failed preflight must explain that the working route is preserved');
-  assert.strictEqual(switchState.preferredDeviceMac, oldId, 'failed speaker switch must preserve the previous preference');
-  assert.strictEqual(switchCalls.indexOf('default-output'), -1, 'failed preflight must not change the working route');
-  assert.strictEqual(switchCalls.indexOf('disconnect-' + oldId), -1, 'failed preflight must not disconnect the working speaker');
-  assert.strictEqual(switchState.outputEnabled, true, 'failed preflight must preserve active Bluetooth routing');
+  assert.strictEqual(failedResult.success, false, 'a Bluetooth link without an A2DP PCM must return a handled failure result');
+  assert(/audio connection did not become ready/.test(failedResult.error), 'false-positive Bluetooth connections must explain that audio is not ready');
+  assert.strictEqual(switchState.preferredDeviceMac, oldId, 'failed audio-readiness preflight must preserve the previous preference');
+  assert.strictEqual(switchCalls.indexOf('default-output'), -1, 'failed audio-readiness preflight must not change the working route');
+  assert.strictEqual(switchCalls.indexOf('disconnect-' + oldId), -1, 'failed audio-readiness preflight must not disconnect the working speaker');
+  assert.strictEqual(switchState.outputEnabled, false, 'failed audio-readiness preflight must preserve default routing');
 
   var removedOutput = false;
   onboardingSaved.outputEnabled = true;
@@ -916,7 +977,7 @@ async function main() {
     normalize: function (value) { return value || 'AUTO'; },
     displayName: function (value) { return value === 'APTX-HD' ? 'aptX HD' : (value === 'APTX' ? 'aptX' : (value || 'unknown')); },
     getStatus: async function () {
-      return { available: true, systemCodecs: ['SBC', 'APTX', 'APTX-HD', 'LDAC'], availableCodecs: ['SBC', 'APTX', 'APTX-HD', 'LDAC'], activeCodec: 'APTX-HD' };
+      return { available: true, deviceConnected: true, systemCodecs: ['SBC', 'APTX', 'APTX-HD', 'LDAC'], availableCodecs: ['SBC', 'APTX', 'APTX-HD', 'LDAC'], activeCodec: 'APTX-HD' };
     }
   };
   plugin.bluetooth = { getStatus: async function () {
@@ -951,6 +1012,19 @@ async function main() {
     'active Bluetooth output must explain the known Volumio volume-display behaviour');
   assert(/no automatic fallback/i.test(uiWrites['sections[0].description']),
     'active Bluetooth output must state that fallback is manual');
+
+  uiWrites = {};
+  uiValues.outputEnabled = false;
+  plugin.codecManager.getStatus = async function () {
+    return { available: true, deviceConnected: false, systemCodecs: ['SBC'], availableCodecs: [], activeCodec: '' };
+  };
+  await plugin.getUIConfig();
+  assert(/audio stream is still preparing/i.test(uiWrites['sections[1].description']),
+    'a base Bluetooth link without an A2DP PCM must be shown as preparing audio');
+  assert.strictEqual(uiWrites['sections[0].content[0].hidden'], true,
+    'Play through Bluetooth must remain hidden until the selected A2DP stream is ready');
+  assert.strictEqual(uiWrites['sections[3].content[0].hidden'], false,
+    'Reconnect must remain available when BlueZ is connected but A2DP audio is not ready');
 
   uiWrites = {};
   uiOptionWrites = {};
