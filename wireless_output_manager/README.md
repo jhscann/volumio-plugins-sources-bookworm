@@ -251,4 +251,6 @@ node scripts/airplay-prototype.js tone \
 
 Keep headphones off until the receiver's actual level is known. The prototype refuses levels above 15%. AirPlay receiver volume is separate from Volumio software volume and any physical amplifier or headphone volume.
 
+The generated signal defaults to only 1% amplitude (`0.01`). If that is inaudible, `--amplitude 0.1` raises the signal to a still-capped 10% while leaving the AirPlay receiver-volume ceiling at 15%. These are independent safety controls.
+
 The test requires a receiver on the same discoverable network and free access to the ports required by that receiver. Native AirPlay 2 receivers may use PTP timing on UDP 319 and 320. This prototype does not grant capabilities, open firewall ports, install packages, save pairing credentials or attempt multi-room playback. PIN-protected Apple receivers are therefore outside this first test.

@@ -47,10 +47,11 @@ async function main() {
   if (command === 'tone') {
     var receiver = prototype.findReceiver(receivers, option('--device', ''));
     console.error('Sending a quiet test tone to ' + receiver.name +
-      '. Keep headphones off until its level is confirmed.');
+      '. Keep headphones off until its level is confirmed. Receiver volume and signal level are independently limited.');
     var result = await prototype.playTestTone(receiver, {
       address: option('--address', ''),
       volume: option('--volume', 5),
+      amplitude: option('--amplitude', 0.01),
       seconds: option('--seconds', 3),
       frequency: option('--frequency', 440)
     });
@@ -58,7 +59,7 @@ async function main() {
     return;
   }
   throw new Error('Usage: airplay-prototype.js discover|check|tone --device <name-or-id> ' +
-    '[--address <advertised-ip>] [--volume 0-15] [--seconds 1-10]');
+    '[--address <advertised-ip>] [--volume 0-15] [--amplitude 0.001-0.1] [--seconds 1-10]');
 }
 
 main().catch(function (error) {

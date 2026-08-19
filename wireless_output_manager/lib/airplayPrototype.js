@@ -24,7 +24,7 @@ function generateTone(options) {
   var sampleRate = 44100;
   var seconds = Math.max(1, Math.min(10, Number(options.seconds) || 3));
   var frequency = Math.max(100, Math.min(2000, Number(options.frequency) || 440));
-  var amplitude = Math.max(0.001, Math.min(0.03, Number(options.amplitude) || 0.01));
+  var amplitude = Math.max(0.001, Math.min(0.1, Number(options.amplitude) || 0.01));
   var frames = Math.floor(sampleRate * seconds);
   var output = Buffer.alloc(frames * 4);
   for (var frame = 0; frame < frames; frame += 1) {
@@ -89,13 +89,17 @@ AirPlayPrototype.prototype.playTestTone = async function (receiver, options) {
   if (!Number.isFinite(volume) || volume < 0 || volume > 15) {
     throw new Error('Prototype receiver volume must be between 0 and 15%');
   }
+  var amplitude = Number(options.amplitude === undefined ? 0.01 : options.amplitude);
+  if (!Number.isFinite(amplitude) || amplitude < 0.001 || amplitude > 0.1) {
+    throw new Error('Prototype test-signal amplitude must be between 0.001 and 0.1');
+  }
   var sender = await self.adapter.checkSender();
   var temporaryDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'wom-airplay-'));
   var commandPipe = path.join(temporaryDirectory, 'commands');
   await self.runner.run('mkfifo', [commandPipe], { timeoutMs: 3000 });
   var sourceAddress = await self.adapter.getSourceAddress(receiver.address);
   var args = self.adapter.buildSenderArgs(receiver, commandPipe, Math.round(volume), sourceAddress);
-  var tone = generateTone(options);
+  var tone = generateTone(Object.assign({}, options, { amplitude: amplitude }));
   var child;
   var commandWriter;
   var output = '';
@@ -157,6 +161,7 @@ AirPlayPrototype.prototype.playTestTone = async function (receiver, options) {
       id: receiver.id,
       address: receiver.address,
       volume: Math.round(volume),
+      amplitude: tone.amplitude,
       seconds: tone.seconds,
       output: output.trim()
     };

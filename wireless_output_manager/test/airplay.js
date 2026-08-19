@@ -105,6 +105,9 @@ async function main() {
 
   await assert.rejects(prototype.playTestTone(receivers[0], { volume: 16 }), /between 0 and 15%/,
     'the prototype must reject unsafe receiver volume before starting a process');
+  await assert.rejects(prototype.playTestTone(receivers[0], { amplitude: 0.11 }),
+    /amplitude must be between 0.001 and 0.1/,
+    'the prototype must reject unsafe test-signal amplitude before starting a process');
 
   responses['avahi-browse -rtp _airplay._tcp'] = { exitCode: 0, stdout: output.split('\n')[0], stderr: '' };
   responses['avahi-browse -rtp _raop._tcp'] = { exitCode: 0, stdout: output.split('\n')[1], stderr: '' };
