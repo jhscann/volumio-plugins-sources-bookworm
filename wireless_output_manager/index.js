@@ -425,6 +425,15 @@ WirelessOutputManager.prototype.getUIConfig = function () {
       value: preferred,
       label: selectedOption ? self._speakerOptionLabel(selectedOption, preferred) : preferredName
     });
+    // Volumio removes a select control when its current value has no matching
+    // option. A clean installation has no saved device, so keep the empty
+    // value in the option list until selection and connection succeed.
+    if (!preferred) {
+      self.configManager.pushUIConfigParam(ui, 'sections[1].content[1].options', {
+        value: '',
+        label: 'Choose a Bluetooth audio device'
+      });
+    }
     options.forEach(function (device) {
       self.configManager.pushUIConfigParam(ui, 'sections[1].content[1].options', {
         value: device.id,

@@ -827,6 +827,7 @@ async function main() {
   assert.deepStrictEqual(plugin.devices, []);
 
   var uiWrites = {};
+  var uiOptionWrites = {};
   var uiValues = {
     preferredDeviceMac: 'C4:30:18:EA:9D:EC',
     preferredDeviceName: 'JBL PartyBox 100',
@@ -841,7 +842,10 @@ async function main() {
   };
   plugin.configManager = {
     setUIConfigParam: function (ui, path, value) { uiWrites[path] = value; },
-    pushUIConfigParam: function () {}
+    pushUIConfigParam: function (ui, path, value) {
+      if (!uiOptionWrites[path]) uiOptionWrites[path] = [];
+      uiOptionWrites[path].push(value);
+    }
   };
   plugin.config = { get: function (key) { return uiValues[key]; } };
   plugin.codecManager = {
@@ -851,7 +855,14 @@ async function main() {
       return { available: true, systemCodecs: ['SBC', 'APTX', 'APTX-HD', 'LDAC'], availableCodecs: ['SBC', 'APTX', 'APTX-HD', 'LDAC'], activeCodec: 'APTX-HD' };
     }
   };
-  plugin.bluetooth = { getStatus: async function () { return { preferred: { paired: true, connected: true } }; } };
+  plugin.bluetooth = { getStatus: async function () {
+    return {
+      preferred: {
+        id: 'C4:30:18:EA:9D:EC', name: 'JBL PartyBox 100',
+        paired: true, connected: true, audioCapable: true
+      }
+    };
+  } };
   plugin.devices = [];
   await plugin.getUIConfig();
   assert(/Music output: the default device/.test(uiWrites['sections[0].description']),
@@ -874,6 +885,7 @@ async function main() {
     'active Bluetooth output must state that fallback is manual');
 
   uiWrites = {};
+  uiOptionWrites = {};
   uiValues.outputEnabled = false;
   uiValues.preferredDeviceMac = '';
   uiValues.preferredDeviceName = '';
@@ -884,10 +896,20 @@ async function main() {
     'default-output recovery status must remain visible without a saved device');
   assert.strictEqual(uiWrites['sections[2].content[0].hidden'], true,
     'device codec control must hide until a Bluetooth device is selected');
+  assert(uiOptionWrites['sections[1].content[1].options'].some(function (option) {
+    return option.value === '' && option.label === 'Choose a Bluetooth audio device';
+  }), 'clean-install device selector must retain an option matching its empty current value');
 
   uiWrites = {};
+  uiOptionWrites = {};
   plugin.devices = [{ id: 'AA:BB:CC:DD:EE:02', name: 'Kitchen', paired: true, connected: false, audioCapable: true }];
   await plugin.getUIConfig();
+  assert(uiOptionWrites['sections[1].content[1].options'].some(function (option) {
+    return option.value === '';
+  }), 'unsaved selector must retain its placeholder when paired devices are listed');
+  assert(uiOptionWrites['sections[1].content[1].options'].some(function (option) {
+    return option.value === 'AA:BB:CC:DD:EE:02';
+  }), 'paired audio devices must remain available beside the placeholder');
   assert.strictEqual(uiWrites['sections[3].content[2].hidden'], false, 'paired audio selector must show for disconnected paired devices');
   assert.strictEqual(uiWrites['sections[3].content[3].hidden'], true, 'plugin-only reset must hide when no device is selected');
   console.log('All tests passed');
