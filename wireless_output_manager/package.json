@@ -1,7 +1,7 @@
 {
   "name": "wireless_output_manager",
   "version": "0.1.0",
-  "description": "Manage wireless audio outputs in Volumio 4, starting with Bluetooth speakers",
+  "description": "Manage manual Bluetooth and experimental AirPlay audio output routing in Volumio 4",
   "main": "index.js",
   "scripts": {
     "test": "node test/run.js && node test/airplay.js",
@@ -19,8 +19,8 @@
     "plugin_type": "system_hardware",
     "architectures": ["amd64", "armhf"],
     "os": ["bookworm"],
-    "details": "Connect Volumio to an external Bluetooth speaker using the audio stack already present on the device.",
-    "changelog": "Initial Bluetooth output, diagnostics, reconnect and guarded BlueALSA integration.",
+    "details": "Manually route Volumio to Bluetooth audio devices or an experimental AirPlay receiver.",
+    "changelog": "Adds guarded AirPlay discovery and manual routing on the development branch; preserves the existing Bluetooth workflow.",
     "has_alsa_contribution": true
   },
   "engines": {

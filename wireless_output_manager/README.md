@@ -1,6 +1,6 @@
 # Wireless Output Manager
 
-Wireless Output Manager is an experimental Volumio 4 / Bookworm plugin that sends Volumio playback to a Bluetooth speaker. Bluetooth is the only implemented output type. AirPlay, Sonos, Chromecast and UPnP/DLNA are future architectural placeholders, not current features.
+Wireless Output Manager is an experimental Volumio 4 / Bookworm plugin that sends Volumio playback to Bluetooth audio devices. A guarded AirPlay sender is now under active device testing on a separate development branch. Sonos, Chromecast and UPnP/DLNA remain architectural placeholders rather than current features.
 
 This version is intended for technical preview and community testing. It has not been submitted to the Volumio plugin beta channel.
 
@@ -208,9 +208,21 @@ When reporting a problem, include:
 
 The internal adapter boundary allows future AirPlay, Sonos, Chromecast and UPnP/DLNA implementations. Those protocols often use remote stream or queue models rather than ALSA devices, so they will be implemented and tested independently.
 
-## AirPlay prototype
+## AirPlay development branch
 
-The AirPlay work is currently an isolated engineering prototype, not a settings-page feature. The user-facing Bluetooth implementation is unchanged. The diagnostic commands below do not alter MPD, Volumio's persistent routing or system services.
+AirPlay discovery and manual output routing are now integrated into the development-branch settings page, but this remains an engineering prototype and has not been pushed or released. The user-facing Bluetooth workflow remains separate. The bounded diagnostic commands below do not alter MPD, Volumio's persistent routing or system services.
+
+The settings workflow is deliberately manual:
+
+1. Select **Search for AirPlay receivers**.
+2. Choose a receiver, enter a cautious starting receiver volume and select **Save AirPlay receiver**.
+3. At the top of the page, select **Play through selected AirPlay receiver**.
+4. Wait for the ready message, then press Play.
+5. Before selecting Bluetooth or another AirPlay receiver, select **Return to default audio output**.
+
+The receiver is rediscovered before every session, so a changed network address is handled without persisting a stale endpoint. The plugin excludes its own Volumio AirPlay receiver to avoid a feedback loop. Password- or PIN-protected receivers are not supported by this first implementation. AirPlay switching stops playback and does not resume it automatically. There is no automatic fallback or automatic playback transfer if the receiver disappears. If the sender process fails, playback is stopped and the plugin removes its AirPlay route so Volumio is not left writing to a dead FIFO.
+
+AirPlay has three relevant volume points: Volumio software volume, the AirPlay receiver-volume command sent when the session starts, and the receiver's own output or amplifier level. The saved AirPlay level defaults to 15%. Keep headphones off until all three levels have been checked.
 
 The prototype discovers `_airplay._tcp` and `_raop._tcp` receivers through `avahi-browse` when available, with a built-in mDNS client when Volumio has Avahi running but does not include that optional command. It can send a short, quiet test tone using Music Assistant's GPLv3 `cliairplay` sender. The sender is pinned to version 0.5.2 and verified by its published SHA-256 checksum. It remains in the plugin's local `bin/airplay` directory and is not installed system-wide.
 
@@ -277,6 +289,6 @@ node scripts/airplay-alsa-prototype.js \
   --seconds 5
 ```
 
-This stage uses `/tmp/wom-airplay-alsa-prototype` only while it runs. It creates private FIFOs, starts the sender before audio is written, limits connection and shutdown waits, and removes its runtime files afterwards. The production routing helper now has mutually exclusive Bluetooth and AirPlay ALSA contributions and restores the previous contribution if Volumio's ALSA rebuild or PCM validation fails. It is not yet connected to the plugin UI or lifecycle.
+This stage uses `/tmp/wom-airplay-alsa-prototype` only while it runs. It creates private FIFOs, starts the sender before audio is written, limits connection and shutdown waits, and removes its runtime files afterwards. The development-branch settings workflow uses the same bridge through mutually exclusive Bluetooth and AirPlay ALSA contributions, restores the previous contribution if Volumio's ALSA rebuild or PCM validation fails, and cleans up AirPlay routing during the plugin lifecycle.
 
 The test requires a receiver on the same discoverable network and free access to the ports required by that receiver. Native AirPlay 2 receivers may use PTP timing on UDP 319 and 320. This prototype does not grant capabilities, open firewall ports, install packages, save pairing credentials or attempt multi-room playback. PIN-protected Apple receivers are therefore outside this first test.

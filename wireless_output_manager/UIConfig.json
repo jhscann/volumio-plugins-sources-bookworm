@@ -9,6 +9,7 @@
       "description": "TRANSLATE.CURRENT_OUTPUT_NOTE",
       "content": [
         {"id": "createOutput", "element": "button", "label": "TRANSLATE.PLAY_ON_WIRELESS", "onClick": {"type": "plugin", "endpoint": "system_hardware/wireless_output_manager", "method": "createBluetoothOutput", "data": []}},
+        {"id": "createAirPlayOutput", "element": "button", "label": "TRANSLATE.PLAY_ON_AIRPLAY", "onClick": {"type": "plugin", "endpoint": "system_hardware/wireless_output_manager", "method": "createAirPlayOutput", "data": []}},
         {"id": "removeOutput", "element": "button", "label": "TRANSLATE.PLAY_ON_DEFAULT", "onClick": {"type": "plugin", "endpoint": "system_hardware/wireless_output_manager", "method": "removeBluetoothOutput", "data": []}}
       ]
     },
@@ -36,6 +37,20 @@
       "content": [
         {"id": "preferredCodec", "element": "select", "label": "TRANSLATE.PREFERRED_CODEC", "description": "TRANSLATE.PREFERRED_CODEC_NOTE", "value": {"value": "AUTO", "label": "Automatic — best available"}, "options": [], "hidden": true},
         {"id": "bluetoothDeviceVolume", "element": "input", "type": {"name": "number"}, "label": "TRANSLATE.BLUETOOTH_STREAM_VOLUME", "description": "TRANSLATE.BLUETOOTH_STREAM_VOLUME_NOTE", "value": 10, "hidden": true, "attributes": [{"min": 0, "max": 100, "step": 1}]}
+      ]
+    },
+    {
+      "id": "airplayReceivers",
+      "element": "section",
+      "label": "TRANSLATE.AIRPLAY_RECEIVERS",
+      "icon": "fa-wifi",
+      "description": "TRANSLATE.AIRPLAY_INTRO",
+      "onSave": {"type": "controller", "endpoint": "system_hardware/wireless_output_manager", "method": "saveAirPlayReceiver"},
+      "saveButton": {"label": "TRANSLATE.SAVE_AIRPLAY_RECEIVER", "data": ["preferredAirPlayReceiver", "airPlayReceiverVolume"]},
+      "content": [
+        {"id": "discoverAirPlayReceivers", "element": "button", "label": "TRANSLATE.SEARCH_FOR_AIRPLAY", "description": "TRANSLATE.SEARCH_FOR_AIRPLAY_NOTE", "onClick": {"type": "plugin", "endpoint": "system_hardware/wireless_output_manager", "method": "discoverAirPlayReceivers", "data": []}},
+        {"id": "preferredAirPlayReceiver", "element": "select", "label": "TRANSLATE.AVAILABLE_AIRPLAY_RECEIVERS", "description": "TRANSLATE.CHOOSE_AIRPLAY_NOTE", "value": {"value": "", "label": "No AirPlay receiver selected"}, "options": []},
+        {"id": "airPlayReceiverVolume", "element": "input", "type": {"name": "number"}, "label": "TRANSLATE.AIRPLAY_RECEIVER_VOLUME", "description": "TRANSLATE.AIRPLAY_RECEIVER_VOLUME_NOTE", "value": 15, "attributes": [{"min": 0, "max": 100, "step": 1}]}
       ]
     },
     {

@@ -10,6 +10,7 @@ BLUEALSA_OVERRIDE="$BLUEALSA_OVERRIDE_DIR/50-wireless-output-manager-codecs.conf
 echo "[$PLUGIN_NAME] Removing plugin-owned ALSA contribution files"
 rm -f "$PLUGIN_DIR/asound/womBluetooth.womBluetoothOut.-1.conf"
 rm -f "$PLUGIN_DIR/asound/womBluetooth.womBluetoothOut.-1.conf.bak"
+rm -f "$PLUGIN_DIR/asound/womAirPlay.womAirPlayOut.-1.conf"
 
 if [ -f "$BLUEALSA_OVERRIDE" ] && grep -q 'Managed by Wireless Output Manager' "$BLUEALSA_OVERRIDE"; then
   echo "[$PLUGIN_NAME] Removing the plugin-owned BlueALSA codec setting"

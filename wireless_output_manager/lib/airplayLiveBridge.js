@@ -42,6 +42,8 @@ function AirPlayLiveBridge(options) {
   this.runner = options.runner;
   this.spawn = options.spawn || spawn;
   this.logger = options.logger || { info: function () {}, warn: function () {}, error: function () {} };
+  this.maximumVolume = options.maximumVolume === undefined ? 15 : Number(options.maximumVolume);
+  this.onUnexpectedExit = options.onUnexpectedExit || function () {};
   this.runtimeDir = options.runtimeDir || path.join('/tmp', 'wireless-output-manager-airplay');
   this.audioFifo = path.join(this.runtimeDir, 'audio.pcm');
   this.commandFifo = path.join(this.runtimeDir, 'commands');
@@ -51,6 +53,7 @@ function AirPlayLiveBridge(options) {
   this.output = '';
   this.ready = false;
   this.audioStarted = false;
+  this.stopping = false;
 }
 
 AirPlayLiveBridge.prototype._safeDirectory = async function () {
@@ -98,8 +101,8 @@ AirPlayLiveBridge.prototype.start = async function (receiver, options) {
   options = options || {};
   if (self.child) throw new Error('An AirPlay bridge is already running');
   var volume = Number(options.volume === undefined ? 5 : options.volume);
-  if (!Number.isFinite(volume) || volume < 0 || volume > 15) {
-    throw new Error('Prototype receiver volume must be between 0 and 15%');
+  if (!Number.isFinite(volume) || volume < 0 || volume > self.maximumVolume) {
+    throw new Error('AirPlay receiver volume must be between 0 and ' + self.maximumVolume + '%');
   }
   if (options.address) {
     var advertised = receiver.addresses && receiver.addresses.length
@@ -137,10 +140,19 @@ AirPlayLiveBridge.prototype.start = async function (receiver, options) {
     self.exitPromise = new Promise(function (resolve) {
       self.child.once('error', function (error) { resolve({ error: error }); });
       self.child.once('close', function (code, signal) {
-        resolve(code === 0 ? { code: code, signal: signal } : {
+        var outcome = code === 0 ? { code: code, signal: signal } : {
           error: new Error('cliairplay exited with code ' + code +
             (signal ? ' (' + signal + ')' : '') + (self.output.trim() ? ': ' + self.output.trim() : ''))
-        });
+        };
+        var unexpected = self.ready && !self.stopping;
+        self.ready = false;
+        resolve(outcome);
+        if (unexpected) {
+          Promise.resolve().then(function () { return self.onUnexpectedExit(outcome); })
+            .catch(function (error) {
+              self.logger.error('AirPlay exit recovery failed: ' + error.message);
+            });
+        }
       });
     });
     var outcome = await withTimeout(Promise.race([
@@ -155,8 +167,8 @@ AirPlayLiveBridge.prototype.start = async function (receiver, options) {
     audioReady.then(function () {
       if (!self.commandWriter || self.audioStarted) return;
       self.audioStarted = true;
-      self.commandWriter.write('TITLE=Wireless Output Manager live test\n');
-      self.commandWriter.write('ARTIST=Volumio ALSA prototype\n');
+      self.commandWriter.write('TITLE=Volumio playback\n');
+      self.commandWriter.write('ARTIST=Wireless Output Manager\n');
       self.commandWriter.write('DURATION=0\nACTION=SENDMETA\n');
       self.commandWriter.write('START_UNIX_MS=0\nACTION=START\n');
     });
@@ -175,30 +187,35 @@ AirPlayLiveBridge.prototype.start = async function (receiver, options) {
 
 AirPlayLiveBridge.prototype.stop = async function () {
   var self = this;
-  self.ready = false;
-  if (self.commandWriter) {
-    try { self.commandWriter.write('ACTION=STOP\n'); } catch (error) {}
-    self.commandWriter.end();
-    self.commandWriter = null;
+  self.stopping = true;
+  try {
+    self.ready = false;
+    if (self.commandWriter) {
+      try { self.commandWriter.write('ACTION=STOP\n'); } catch (error) {}
+      self.commandWriter.end();
+      self.commandWriter = null;
+    }
+    if (self.child && self.child.exitCode === null && !self.child.killed) self.child.kill('SIGTERM');
+    if (self.exitPromise) {
+      await withTimeout(self.exitPromise, 5000, 'AirPlay sender did not stop cleanly').catch(async function () {
+        if (self.child && self.child.exitCode === null) {
+          self.child.kill('SIGKILL');
+          await delay(100);
+        }
+      });
+    }
+    self.child = null;
+    self.exitPromise = null;
+    self.audioStarted = false;
+    await self._cleanRuntime();
+  } finally {
+    self.stopping = false;
   }
-  if (self.child && self.child.exitCode === null && !self.child.killed) self.child.kill('SIGTERM');
-  if (self.exitPromise) {
-    await withTimeout(self.exitPromise, 5000, 'AirPlay sender did not stop cleanly').catch(async function () {
-      if (self.child && self.child.exitCode === null) {
-        self.child.kill('SIGKILL');
-        await delay(100);
-      }
-    });
-  }
-  self.child = null;
-  self.exitPromise = null;
-  self.audioStarted = false;
-  await self._cleanRuntime();
 };
 
 AirPlayLiveBridge.prototype.getStatus = function () {
   return {
-    running: Boolean(this.child),
+    running: Boolean(this.child && this.child.exitCode === null),
     ready: this.ready,
     audioStarted: this.audioStarted,
     fifo: this.audioFifo,
