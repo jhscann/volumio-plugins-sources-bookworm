@@ -590,6 +590,18 @@ async function main() {
   assert.strictEqual(routeState.outputEnabled, false);
 
   routeCalls = [];
+  routePlugin.airplayBridge.getStatus = function () { return { running: true, ready: true }; };
+  routePlugin.airplayBridge.start = async function () {
+    throw new Error('cliairplay exited with code 1: very long low-level diagnostic output');
+  };
+  var unavailableReceiverResult = await routePlugin.createAirPlayOutput();
+  assert.strictEqual(unavailableReceiverResult.success, false);
+  assert(/Could not start AirPlay to Living Room.*Wait a few seconds/.test(unavailableReceiverResult.message),
+    'temporary receiver startup failures must use a concise retry message');
+  assert(unavailableReceiverResult.message.indexOf('low-level diagnostic') === -1,
+    'raw sender diagnostics must not escape into the user-facing toast');
+
+  routeCalls = [];
   routeState.outputEnabled = true;
   routeState.activeBackend = 'airplay';
   await routePlugin._handleUnexpectedAirPlayExit({ error: new Error('network lost') });

@@ -1234,10 +1234,17 @@ WirelessOutputManager.prototype.createAirPlayOutput = function () {
         var ready;
         var routeInstalled = false;
         try {
-          ready = await self.airplayBridge.start(receiver, {
-            address: selectedAddress,
-            volume: volume
-          });
+          try {
+            ready = await self.airplayBridge.start(receiver, {
+              address: selectedAddress,
+              volume: volume
+            });
+          } catch (senderError) {
+            senderError.userMessage = 'Could not start AirPlay to ' +
+              (receiver.name || 'the selected receiver') +
+              '. The receiver may still be becoming available. Wait a few seconds, search again if needed, then try once more.';
+            throw senderError;
+          }
           var result = await self.outputManager.createAirPlayOutput(ready.fifo);
           routeInstalled = true;
           var bridgeStatus = self.airplayBridge.getStatus();
