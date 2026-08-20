@@ -7,7 +7,8 @@
     "test": "node test/run.js && node test/airplay.js",
     "airplay:discover": "node scripts/airplay-prototype.js discover",
     "airplay:check": "node scripts/airplay-prototype.js check",
-    "airplay:file": "node scripts/airplay-prototype.js file"
+    "airplay:file": "node scripts/airplay-prototype.js file",
+    "airplay:alsa": "node scripts/airplay-alsa-prototype.js"
   },
   "author": "John Cann",
   "license": "MIT",

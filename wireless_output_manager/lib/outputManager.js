@@ -9,7 +9,9 @@ function OutputManager(options) {
   this.runner = options.runner;
   this.logger = options.logger;
   this.commandRouter = options.commandRouter;
-  this.filename = 'womBluetooth.womBluetoothOut.-1.conf';
+  this.bluetoothFilename = 'womBluetooth.womBluetoothOut.-1.conf';
+  this.airplayFilename = 'womAirPlay.womAirPlayOut.-1.conf';
+  this.filename = this.bluetoothFilename;
 }
 
 OutputManager.prototype.detectStack = async function () {
@@ -35,6 +37,52 @@ OutputManager.prototype._rebuild = function () {
   }
 };
 
+OutputManager.prototype._contributionPath = function (filename) {
+  return path.join(this.pluginDir, 'asound', filename);
+};
+
+OutputManager.prototype._snapshotContributions = async function () {
+  var self = this;
+  var snapshots = {};
+  await Promise.all([self.bluetoothFilename, self.airplayFilename].map(async function (filename) {
+    var target = self._contributionPath(filename);
+    snapshots[filename] = await fs.pathExists(target) ? await fs.readFile(target) : null;
+  }));
+  return snapshots;
+};
+
+OutputManager.prototype._restoreContributions = async function (snapshots) {
+  var self = this;
+  await Promise.all([self.bluetoothFilename, self.airplayFilename].map(async function (filename) {
+    var target = self._contributionPath(filename);
+    if (snapshots[filename] === null) await fs.remove(target);
+    else await fs.writeFile(target, snapshots[filename], { mode: 0o644 });
+  }));
+};
+
+OutputManager.prototype._installContribution = async function (filename, content, expectedPcm) {
+  var asoundDir = path.join(this.pluginDir, 'asound');
+  var target = this._contributionPath(filename);
+  var alternateFilename = filename === this.bluetoothFilename
+    ? this.airplayFilename : this.bluetoothFilename;
+  var snapshots;
+  await fs.ensureDir(asoundDir);
+  snapshots = await this._snapshotContributions();
+  try {
+    await fs.remove(this._contributionPath(alternateFilename));
+    await fs.writeFile(target, content, { encoding: 'utf8', mode: 0o644 });
+    await this._rebuild();
+    var verify = await this.runner.run('aplay', ['-L'], { allowFailure: true });
+    if (verify.stdout.split(/\r?\n/).indexOf(expectedPcm) === -1) {
+      throw new Error('ALSA did not expose ' + expectedPcm + ' after rebuilding its configuration');
+    }
+  } catch (error) {
+    await this._restoreContributions(snapshots);
+    await this._rebuild().catch(function () {});
+    throw error;
+  }
+};
+
 OutputManager.prototype.createOutput = async function (deviceId) {
   var mac = String(deviceId || '').toUpperCase();
   if (!MAC_RE.test(mac)) throw new Error('A valid preferred Bluetooth device is required');
@@ -42,11 +90,6 @@ OutputManager.prototype.createOutput = async function (deviceId) {
   if (!stack.bluealsa) {
     throw new Error('No supported Bluetooth audio sender is installed. Diagnostics found no BlueALSA service; no audio configuration was changed.');
   }
-  var asoundDir = path.join(this.pluginDir, 'asound');
-  var target = path.join(asoundDir, this.filename);
-  var backup = target + '.bak';
-  await fs.ensureDir(asoundDir);
-  if (await fs.pathExists(target)) await fs.copy(target, backup, { overwrite: true });
   var content = [
     '# Managed by Wireless Output Manager. Remove via the plugin, not by editing this file.',
     'pcm.womBluetooth {',
@@ -59,19 +102,7 @@ OutputManager.prototype.createOutput = async function (deviceId) {
     '}',
     ''
   ].join('\n');
-  await fs.writeFile(target, content, { encoding: 'utf8', mode: 0o644 });
-  try {
-    await this._rebuild();
-    var verify = await this.runner.run('aplay', ['-L'], { allowFailure: true });
-    if (verify.stdout.split(/\r?\n/).indexOf('womBluetooth') === -1) {
-      throw new Error('ALSA did not expose womBluetooth after rebuilding its configuration');
-    }
-  } catch (error) {
-    if (await fs.pathExists(backup)) await fs.move(backup, target, { overwrite: true });
-    else await fs.remove(target);
-    await this._rebuild().catch(function () {});
-    throw error;
-  }
+  await this._installContribution(this.bluetoothFilename, content, 'womBluetooth');
   return {
     pcm: 'womBluetooth', stack: stack,
     selectable: false,
@@ -79,17 +110,57 @@ OutputManager.prototype.createOutput = async function (deviceId) {
   };
 };
 
+OutputManager.prototype.createAirPlayOutput = async function (fifoPath) {
+  fifoPath = String(fifoPath || '');
+  if (!path.isAbsolute(fifoPath) || /["\r\n]/.test(fifoPath)) {
+    throw new Error('A safe absolute AirPlay FIFO path is required');
+  }
+  var content = [
+    '# Managed by Wireless Output Manager. Remove via the plugin, not by editing this file.',
+    'pcm.womAirPlayFile {',
+    '  type file',
+    '  slave.pcm "null"',
+    '  file "' + fifoPath + '"',
+    '  format "raw"',
+    '}',
+    '',
+    'pcm.womAirPlay {',
+    '  type plug',
+    '  slave {',
+    '    pcm "womAirPlayFile"',
+    '    format S16_LE',
+    '    rate 44100',
+    '    channels 2',
+    '  }',
+    '}',
+    ''
+  ].join('\n');
+  await this._installContribution(this.airplayFilename, content, 'womAirPlay');
+  return {
+    pcm: 'womAirPlay', fifo: fifoPath, stack: 'airplay', selectable: false,
+    message: 'The AirPlay PCM bridge is active through Volumio\'s modular ALSA pipeline.'
+  };
+};
+
 OutputManager.prototype.removeOutput = async function () {
-  var target = path.join(this.pluginDir, 'asound', this.filename);
-  await fs.remove(target);
+  await fs.remove(this._contributionPath(this.bluetoothFilename));
+  await fs.remove(this._contributionPath(this.airplayFilename));
   await this._rebuild().catch(function (error) {
     throw new Error('Removed the plugin contribution but ALSA rebuild failed: ' + error.message);
   });
 };
 
 OutputManager.prototype.getStatus = async function () {
-  var target = path.join(this.pluginDir, 'asound', this.filename);
-  return { configured: await fs.pathExists(target), stack: await this.detectStack() };
+  var bluetoothConfigured = await fs.pathExists(this._contributionPath(this.bluetoothFilename));
+  var airplayConfigured = await fs.pathExists(this._contributionPath(this.airplayFilename));
+  var backend = bluetoothConfigured && airplayConfigured ? 'conflict'
+    : (airplayConfigured ? 'airplay' : (bluetoothConfigured ? 'bluetooth' : ''));
+  return {
+    configured: bluetoothConfigured || airplayConfigured,
+    backend: backend,
+    conflict: bluetoothConfigured && airplayConfigured,
+    stack: await this.detectStack()
+  };
 };
 
 module.exports = OutputManager;

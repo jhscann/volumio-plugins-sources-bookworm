@@ -210,7 +210,7 @@ The internal adapter boundary allows future AirPlay, Sonos, Chromecast and UPnP/
 
 ## AirPlay prototype
 
-The AirPlay work is currently an isolated engineering prototype, not a plugin feature. It deliberately does not alter the settings page, Volumio routing, MPD, ALSA, system services or the Bluetooth implementation.
+The AirPlay work is currently an isolated engineering prototype, not a settings-page feature. The user-facing Bluetooth implementation is unchanged. The diagnostic commands below do not alter MPD, Volumio's persistent routing or system services.
 
 The prototype discovers `_airplay._tcp` and `_raop._tcp` receivers through `avahi-browse` when available, with a built-in mDNS client when Volumio has Avahi running but does not include that optional command. It can send a short, quiet test tone using Music Assistant's GPLv3 `cliairplay` sender. The sender is pinned to version 0.5.2 and verified by its published SHA-256 checksum. It remains in the plugin's local `bin/airplay` directory and is not installed system-wide.
 
@@ -265,5 +265,18 @@ node scripts/airplay-prototype.js file \
 ```
 
 The complete excerpt is decoded into a bounded in-memory PCM buffer before the receiver is contacted. The command refuses excerpts longer than ten seconds and does not enable or reuse Volumio's multiroom FIFO.
+
+The next prototype stage sends the same bounded excerpt through an ALSA `file` PCM and a plugin-owned FIFO before it reaches AirPlay. This exercises the mechanism intended for live Volumio audio without changing the installed plugin or persistent ALSA configuration:
+
+```bash
+node scripts/airplay-alsa-prototype.js \
+  --device "AA:BB:CC:DD:EE:FF" \
+  --file "/var/lib/mpd/music/NAS/example.flac" \
+  --volume 5 \
+  --seek 60 \
+  --seconds 5
+```
+
+This stage uses `/tmp/wom-airplay-alsa-prototype` only while it runs. It creates private FIFOs, starts the sender before audio is written, limits connection and shutdown waits, and removes its runtime files afterwards. The production routing helper now has mutually exclusive Bluetooth and AirPlay ALSA contributions and restores the previous contribution if Volumio's ALSA rebuild or PCM validation fails. It is not yet connected to the plugin UI or lifecycle.
 
 The test requires a receiver on the same discoverable network and free access to the ports required by that receiver. Native AirPlay 2 receivers may use PTP timing on UDP 319 and 320. This prototype does not grant capabilities, open firewall ports, install packages, save pairing credentials or attempt multi-room playback. PIN-protected Apple receivers are therefore outside this first test.

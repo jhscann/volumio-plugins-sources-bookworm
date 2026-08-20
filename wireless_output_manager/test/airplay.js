@@ -1,13 +1,18 @@
 'use strict';
 
 var assert = require('assert');
+var fs = require('fs-extra');
+var os = require('os');
+var path = require('path');
 var AirPlayAdapter = require('../lib/adapters/airplay');
+var AirPlayLiveBridge = require('../lib/airplayLiveBridge');
 var AirPlayPrototype = require('../lib/airplayPrototype').AirPlayPrototype;
 var generateTone = require('../lib/airplayPrototype').generateTone;
 var ffmpegFileArgs = require('../lib/airplayPrototype').ffmpegFileArgs;
 var MdnsDiscovery = require('../lib/mdnsDiscovery').MdnsDiscovery;
 var encodeName = require('../lib/mdnsDiscovery').encodeName;
 var parsePacket = require('../lib/mdnsDiscovery').parsePacket;
+var OutputManager = require('../lib/outputManager');
 
 function dnsRecord(name, type, data) {
   var header = Buffer.alloc(10);
@@ -132,6 +137,75 @@ async function main() {
   receivers = await fallbackAdapter.discover();
   assert.strictEqual(receivers.length, 1, 'built-in mDNS must be used when avahi-browse is absent');
   assert.strictEqual(receivers[0].name, 'Living Room');
+
+  var temporaryPlugin = await fs.mkdtemp(path.join(os.tmpdir(), 'wom-output-manager-'));
+  var advertisedPcms = 'womAirPlay\nwomBluetooth\n';
+  var rebuilds = 0;
+  var outputRunner = {
+    run: async function (command, commandArgs) {
+      if (command === 'which') {
+        return { exitCode: commandArgs[0] === 'bluealsa' ? 0 : 1, stdout: '', stderr: '' };
+      }
+      if (command === 'aplay') {
+        return { exitCode: 0, stdout: advertisedPcms, stderr: '' };
+      }
+      throw new Error('Unexpected command in output-manager test: ' + command);
+    }
+  };
+  var outputManager = new OutputManager({
+    pluginDir: temporaryPlugin,
+    runner: outputRunner,
+    commandRouter: {
+      executeOnPlugin: function () { rebuilds += 1; return Promise.resolve(); }
+    }
+  });
+  try {
+    await outputManager.createAirPlayOutput('/tmp/wom-airplay-test/audio.pcm');
+    var airplayContribution = path.join(temporaryPlugin, 'asound',
+      'womAirPlay.womAirPlayOut.-1.conf');
+    var bluetoothContribution = path.join(temporaryPlugin, 'asound',
+      'womBluetooth.womBluetoothOut.-1.conf');
+    assert(await fs.pathExists(airplayContribution), 'AirPlay must use an AirPlay-named contribution');
+    assert(!(await fs.pathExists(bluetoothContribution)), 'AirPlay must not leave Bluetooth routing active');
+    var airplayConfig = await fs.readFile(airplayContribution, 'utf8');
+    assert(airplayConfig.indexOf('format S16_LE') !== -1 &&
+      airplayConfig.indexOf('rate 44100') !== -1 && airplayConfig.indexOf('channels 2') !== -1,
+    'the AirPlay bridge must normalise Volumio audio to its fixed PCM format');
+    var routeStatus = await outputManager.getStatus();
+    assert.strictEqual(routeStatus.backend, 'airplay');
+
+    await outputManager.createOutput('AA:BB:CC:DD:EE:FF');
+    assert(await fs.pathExists(bluetoothContribution), 'Bluetooth routing must remain supported');
+    assert(!(await fs.pathExists(airplayContribution)), 'switching to Bluetooth must remove AirPlay routing');
+
+    advertisedPcms = 'womBluetooth\n';
+    await assert.rejects(outputManager.createAirPlayOutput('/tmp/wom-airplay-test/audio.pcm'),
+      /did not expose womAirPlay/, 'failed AirPlay validation must be reported');
+    assert(await fs.pathExists(bluetoothContribution), 'failed AirPlay setup must restore Bluetooth routing');
+    assert(!(await fs.pathExists(airplayContribution)), 'failed AirPlay setup must remove its partial route');
+
+    await outputManager.removeOutput();
+    assert(!(await fs.pathExists(bluetoothContribution)) && !(await fs.pathExists(airplayContribution)),
+      'returning to the default output must remove every owned wireless contribution');
+    assert(rebuilds >= 5, 'each route change and rollback must rebuild Volumio ALSA configuration');
+    await assert.rejects(outputManager.createAirPlayOutput('relative/audio.pcm'), /safe absolute/);
+  } finally {
+    await fs.remove(temporaryPlugin);
+  }
+
+  var unsafeRuntime = await fs.mkdtemp(path.join(os.tmpdir(), 'wom-live-bridge-'));
+  var regularPath = path.join(unsafeRuntime, 'audio.pcm');
+  await fs.writeFile(regularPath, 'do not replace');
+  var bridge = new AirPlayLiveBridge({
+    runtimeDir: unsafeRuntime,
+    runner: { run: async function () { throw new Error('mkfifo must not run'); } }
+  });
+  try {
+    await assert.rejects(bridge._replaceFifo(regularPath), /Refusing to replace non-FIFO/,
+      'the bridge must never replace an unexpected runtime file');
+  } finally {
+    await fs.remove(unsafeRuntime);
+  }
 
   console.log('AirPlay prototype tests passed');
 }
