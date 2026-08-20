@@ -56,6 +56,25 @@ function AirPlayLiveBridge(options) {
   this.stopping = false;
 }
 
+AirPlayLiveBridge.prototype._setCommandWriter = function (writer) {
+  var self = this;
+  self.commandWriter = writer;
+  writer.on('error', function (error) {
+    if (self.commandWriter === writer) self.commandWriter = null;
+    self.logger.warn('AirPlay command pipe closed: ' + error.message);
+  });
+};
+
+AirPlayLiveBridge.prototype._writeCommand = function (command) {
+  if (!this.commandWriter || this.commandWriter.destroyed) return false;
+  try {
+    return this.commandWriter.write(command);
+  } catch (error) {
+    this.logger.warn('Unable to write to AirPlay command pipe: ' + error.message);
+    return false;
+  }
+};
+
 AirPlayLiveBridge.prototype._safeDirectory = async function () {
   var existing = await fs.lstat(this.runtimeDir).catch(function () { return null; });
   if (existing && (!existing.isDirectory() || existing.isSymbolicLink())) {
@@ -65,10 +84,11 @@ AirPlayLiveBridge.prototype._safeDirectory = async function () {
     throw new Error('AirPlay runtime directory is owned by another user');
   }
   await fs.ensureDir(this.runtimeDir);
-  await fs.chmod(this.runtimeDir, 0o700);
+  await fs.chmod(this.runtimeDir, 0o750);
+  await this.runner.run('chgrp', ['audio', this.runtimeDir], { timeoutMs: 3000 });
 };
 
-AirPlayLiveBridge.prototype._replaceFifo = async function (fifoPath) {
+AirPlayLiveBridge.prototype._replaceFifo = async function (fifoPath, mode, group) {
   var existing = await fs.lstat(fifoPath).catch(function () { return null; });
   if (existing) {
     if (!existing.isFIFO() || existing.isSymbolicLink()) {
@@ -76,13 +96,17 @@ AirPlayLiveBridge.prototype._replaceFifo = async function (fifoPath) {
     }
     await fs.unlink(fifoPath);
   }
-  await this.runner.run('mkfifo', ['-m', '600', fifoPath], { timeoutMs: 3000 });
+  await this.runner.run('mkfifo', ['-m', mode, fifoPath], { timeoutMs: 3000 });
+  if (group) await this.runner.run('chgrp', [group, fifoPath], { timeoutMs: 3000 });
 };
 
 AirPlayLiveBridge.prototype._prepareRuntime = async function () {
   await this._safeDirectory();
-  await this._replaceFifo(this.audioFifo);
-  await this._replaceFifo(this.commandFifo);
+  // MPD runs as a separate user in Volumio but belongs to the audio group.
+  // Permit that group to traverse the private runtime directory and write
+  // PCM, while keeping the sender command channel private to the plugin.
+  await this._replaceFifo(this.audioFifo, '660', 'audio');
+  await this._replaceFifo(this.commandFifo, '600');
 };
 
 AirPlayLiveBridge.prototype._removeFifo = async function (fifoPath) {
@@ -161,16 +185,16 @@ AirPlayLiveBridge.prototype.start = async function (receiver, options) {
     ]), 15000, 'Timed out preparing AirPlay receiver ' + receiver.name);
     if (outcome.error) throw outcome.error;
     if (!outcome.connected) throw new Error('AirPlay sender stopped before becoming ready');
-    self.commandWriter = await withTimeout(openFifoWriter(self.commandFifo), 3000,
-      'cliairplay did not open its command pipe');
+    self._setCommandWriter(await withTimeout(openFifoWriter(self.commandFifo), 3000,
+      'cliairplay did not open its command pipe'));
     self.ready = true;
     audioReady.then(function () {
       if (!self.commandWriter || self.audioStarted) return;
       self.audioStarted = true;
-      self.commandWriter.write('TITLE=Volumio playback\n');
-      self.commandWriter.write('ARTIST=Wireless Output Manager\n');
-      self.commandWriter.write('DURATION=0\nACTION=SENDMETA\n');
-      self.commandWriter.write('START_UNIX_MS=0\nACTION=START\n');
+      self._writeCommand('TITLE=Volumio playback\n');
+      self._writeCommand('ARTIST=Wireless Output Manager\n');
+      self._writeCommand('DURATION=0\nACTION=SENDMETA\n');
+      self._writeCommand('START_UNIX_MS=0\nACTION=START\n');
     });
     return {
       receiver: receiver.name,
@@ -191,9 +215,14 @@ AirPlayLiveBridge.prototype.stop = async function () {
   try {
     self.ready = false;
     if (self.commandWriter) {
-      try { self.commandWriter.write('ACTION=STOP\n'); } catch (error) {}
-      self.commandWriter.end();
+      var commandWriter = self.commandWriter;
       self.commandWriter = null;
+      try {
+        commandWriter.write('ACTION=STOP\n');
+        commandWriter.end();
+      } catch (error) {
+        self.logger.warn('Unable to close AirPlay command pipe cleanly: ' + error.message);
+      }
     }
     if (self.child && self.child.exitCode === null && !self.child.killed) self.child.kill('SIGTERM');
     if (self.exitPromise) {

@@ -1,6 +1,7 @@
 'use strict';
 
 var assert = require('assert');
+var EventEmitter = require('events');
 var fs = require('fs-extra');
 var os = require('os');
 var path = require('path');
@@ -206,6 +207,50 @@ async function main() {
   } finally {
     await fs.remove(unsafeRuntime);
   }
+
+  var permissionRuntime = await fs.mkdtemp(path.join(os.tmpdir(), 'wom-live-permissions-'));
+  var permissionCalls = [];
+  var permissionBridge = new AirPlayLiveBridge({
+    runtimeDir: permissionRuntime,
+    runner: {
+      run: async function (command, commandArgs) {
+        permissionCalls.push([command].concat(commandArgs).join(' '));
+        return { exitCode: 0, stdout: '', stderr: '' };
+      }
+    }
+  });
+  try {
+    await permissionBridge._prepareRuntime();
+    assert(permissionCalls.indexOf('chgrp audio ' + permissionRuntime) !== -1,
+      'the AirPlay runtime directory must be traversable by Volumio audio processes');
+    assert(permissionCalls.indexOf('mkfifo -m 660 ' + permissionBridge.audioFifo) !== -1 &&
+      permissionCalls.indexOf('chgrp audio ' + permissionBridge.audioFifo) !== -1,
+    'the PCM pipe must be writable by MPD through the audio group');
+    assert(permissionCalls.indexOf('mkfifo -m 600 ' + permissionBridge.commandFifo) !== -1,
+      'the AirPlay command pipe must remain private to the plugin');
+  } finally {
+    await fs.remove(permissionRuntime);
+  }
+
+  var warnings = [];
+  var brokenPipeBridge = new AirPlayLiveBridge({
+    logger: {
+      info: function () {},
+      warn: function (message) { warnings.push(message); },
+      error: function () {}
+    }
+  });
+  var brokenWriter = new EventEmitter();
+  brokenWriter.destroyed = false;
+  brokenWriter.write = function () { return true; };
+  brokenPipeBridge._setCommandWriter(brokenWriter);
+  var pipeError = new Error('broken pipe');
+  pipeError.code = 'EPIPE';
+  brokenWriter.emit('error', pipeError);
+  assert.strictEqual(brokenPipeBridge.commandWriter, null,
+    'a broken AirPlay command pipe must be detached without terminating Volumio');
+  assert(warnings.some(function (message) { return message.indexOf('broken pipe') !== -1; }),
+    'a broken AirPlay command pipe must leave a concise diagnostic warning');
 
   console.log('AirPlay prototype tests passed');
 }

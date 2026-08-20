@@ -364,8 +364,10 @@ WirelessOutputManager.prototype._returnToDefaultIfWireless = async function () {
 WirelessOutputManager.prototype._scheduleReconnect = function (delayMs) {
   var self = this;
   self._clearReconnect();
-  if (self.foregroundBluetoothBusy || !self.config.get('enabled') || !self.config.get('autoReconnect')) return;
+  if (self.foregroundBluetoothBusy || self.config.get('activeBackend') === 'airplay' ||
+    !self.config.get('enabled') || !self.config.get('autoReconnect')) return;
   self.reconnectTimer = setTimeout(function () {
+    if (self.config.get('activeBackend') === 'airplay') return;
     self._reconnectPreferred().finally(function () { self._scheduleReconnect(15000); });
   }, delayMs);
   if (self.reconnectTimer.unref) self.reconnectTimer.unref();
@@ -374,7 +376,7 @@ WirelessOutputManager.prototype._scheduleReconnect = function (delayMs) {
 WirelessOutputManager.prototype._reconnectPreferred = async function () {
   var self = this;
   var mac = self.config.get('preferredDeviceMac');
-  if (!mac || self.foregroundBluetoothBusy) return;
+  if (!mac || self.foregroundBluetoothBusy || self.config.get('activeBackend') === 'airplay') return;
   if (self.reconnectPromise) return self.reconnectPromise;
   self.reconnectBusy = true;
   self.reconnectPromise = Promise.resolve().then(async function () {
