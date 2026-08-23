@@ -5,6 +5,7 @@ var fs = require('fs-extra');
 var path = require('path');
 var AirPlayAdapter = require('./lib/adapters/airplay');
 var AirPlayLiveBridge = require('./lib/airplayLiveBridge');
+var AirPlayPlaybackController = require('./lib/airplayPlaybackController');
 var CommandRunner = require('./lib/commandRunner').CommandRunner;
 var BluetoothAdapter = require('./lib/adapters/bluetooth');
 var BluetoothVolumeManager = require('./lib/bluetoothVolumeManager');
@@ -38,6 +39,7 @@ function WirelessOutputManager(context) {
   this.lastDiagnostics = null;
   this.devices = [];
   this.airplayReceivers = [];
+  this.airPlayStateCallbackRegistered = false;
 }
 
 WirelessOutputManager.prototype.onVolumioStart = function () {
@@ -57,6 +59,18 @@ WirelessOutputManager.prototype.onVolumioStart = function () {
     maximumVolume: 100,
     onUnexpectedExit: this._handleUnexpectedAirPlayExit.bind(this)
   });
+  this.airplayPlayback = new AirPlayPlaybackController({
+    bridge: this.airplayBridge,
+    logger: this.log,
+    isActive: function () {
+      return Boolean(this.config && this.config.get('outputEnabled') === true &&
+        this.config.get('activeBackend') === 'airplay' && this.airplayBridge.getStatus().ready);
+    }.bind(this)
+  });
+  if (!this.airPlayStateCallbackRegistered && typeof this.commandRouter.addCallback === 'function') {
+    this.commandRouter.addCallback('volumioPushState', this._handleVolumioState.bind(this));
+    this.airPlayStateCallbackRegistered = true;
+  }
   this.bluetoothVolume = new BluetoothVolumeManager({
     runner: this.runner, logger: this.btLog, safeMaximumPercent: 10
   });
@@ -99,6 +113,7 @@ WirelessOutputManager.prototype.onStop = function () {
   var self = this;
   self.log.info('Stopping');
   self._clearReconnect();
+  if (self.airplayPlayback) self.airplayPlayback.reset();
   if (!self.airplayBridge || (self.config.get('activeBackend') !== 'airplay' &&
     !self.airplayBridge.getStatus().running)) return libQ.resolve();
   return libQ.resolve(Promise.resolve().then(async function () {
@@ -123,6 +138,11 @@ WirelessOutputManager.prototype.onInstall = function () { return libQ.resolve();
 WirelessOutputManager.prototype.onUninstall = function () { return libQ.resolve(); };
 WirelessOutputManager.prototype.getConfigurationFiles = function () { return ['config.json']; };
 WirelessOutputManager.prototype._debugEnabled = function () { return Boolean(this.config && this.config.get('debugLogging')); };
+
+WirelessOutputManager.prototype._handleVolumioState = function (state) {
+  if (!this.airplayPlayback) return;
+  this.airplayPlayback.handle(state).catch(function () {});
+};
 
 WirelessOutputManager.prototype._codecPreferences = function () {
   try {
@@ -356,6 +376,7 @@ WirelessOutputManager.prototype._returnToDefaultIfWireless = async function () {
     await self._stopPlaybackForRouting();
     await self.outputManager.removeOutput();
     if (self.airplayBridge) await self.airplayBridge.stop();
+    if (self.airplayPlayback) self.airplayPlayback.reset();
     self.config.set('outputEnabled', false);
     self.config.set('activeBackend', '');
   });
@@ -430,6 +451,7 @@ WirelessOutputManager.prototype._withRoutingLock = async function (operation) {
 WirelessOutputManager.prototype._handleUnexpectedAirPlayExit = async function (outcome) {
   var self = this;
   if (!self.config || self.config.get('activeBackend') !== 'airplay') return;
+  if (self.airplayPlayback) self.airplayPlayback.reset();
   var detail = outcome && outcome.error ? ': ' + outcome.error.message : '';
   self.log.warn('AirPlay sender stopped unexpectedly' + detail);
   await self._withRoutingLock(async function () {
@@ -663,7 +685,7 @@ WirelessOutputManager.prototype.getUIConfig = function () {
     } else if (airplayOutputActive) {
       outputDescription = 'Music output: ' + (self.config.get('preferredAirPlayName') || 'the selected AirPlay receiver') +
         ' over AirPlay at a starting receiver volume of ' + self._airPlayVolume() + '%. Changing output stops playback; press Play afterward. ' +
-        'There is no automatic fallback if the receiver or network becomes unavailable.';
+        'Track changes, seeks, pause and resume keep this AirPlay session open. There is no automatic fallback if the receiver or network becomes unavailable.';
     } else if (preferred) {
       outputDescription = 'Music output: the default device selected in Volumio Playback Options. Selected Bluetooth device: ' +
         preferredName + ' — ' + (audioReady ? 'audio ready' : (connected ? 'preparing audio' : 'disconnected')) +
@@ -1160,6 +1182,7 @@ WirelessOutputManager.prototype.resetSpeakerSetup = function () {
     self.devices = [];
     self.airplayReceivers = [];
     if (self.airplayBridge) await self.airplayBridge.stop().catch(function () {});
+    if (self.airplayPlayback) self.airplayPlayback.reset();
     await self.refreshUI();
   }, 'Plugin setup reset; system Bluetooth pairings were preserved');
 };
@@ -1255,6 +1278,7 @@ WirelessOutputManager.prototype.createAirPlayOutput = function () {
           self.config.set('preferredAirPlayAddress', ready.address);
           self.config.set('outputEnabled', true);
           self.config.set('activeBackend', 'airplay');
+          if (self.airplayPlayback) self.airplayPlayback.reset();
           return result;
         } catch (error) {
           if (routeInstalled) await self.outputManager.removeOutput().catch(function (rollbackError) {
@@ -1285,6 +1309,7 @@ WirelessOutputManager.prototype.removeBluetoothOutput = function () {
         return self.outputManager.removeOutput();
       }).then(async function (result) {
         if (self.airplayBridge) await self.airplayBridge.stop();
+        if (self.airplayPlayback) self.airplayPlayback.reset();
         self.config.set('outputEnabled', false);
         self.config.set('activeBackend', '');
         return result;

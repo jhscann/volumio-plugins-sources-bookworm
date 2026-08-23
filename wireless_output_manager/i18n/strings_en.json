@@ -36,7 +36,7 @@
   "SEARCH_FOR_AIRPLAY": "Search for AirPlay receivers",
   "SEARCH_FOR_AIRPLAY_NOTE": "The receiver must be awake, on the same network and configured to allow AirPlay without a password. This plugin's own Volumio receiver is excluded.",
   "AVAILABLE_AIRPLAY_RECEIVERS": "Available AirPlay receivers",
-  "CHOOSE_AIRPLAY_NOTE": "Save the receiver you want to use, then choose Play through selected AirPlay receiver above. Switching output is manual and stops playback.",
+  "CHOOSE_AIRPLAY_NOTE": "Save the receiver you want to use, then choose Play through selected AirPlay receiver above. Switching output is manual and stops playback. Once connected, pause, resume, track changes and seeks keep the AirPlay session open.",
   "SAVE_AIRPLAY_RECEIVER": "Save AirPlay receiver",
   "AIRPLAY_RECEIVER_VOLUME": "AirPlay receiver volume (%)",
   "AIRPLAY_RECEIVER_VOLUME_NOTE": "Applied by the sender when an AirPlay session starts. It is separate from Volumio software volume and the receiver's own output level. Start low and keep headphones off until the level is confirmed.",

@@ -7,6 +7,7 @@ var os = require('os');
 var path = require('path');
 var AirPlayAdapter = require('../lib/adapters/airplay');
 var AirPlayLiveBridge = require('../lib/airplayLiveBridge');
+var AirPlayPlaybackController = require('../lib/airplayPlaybackController');
 var AirPlayPrototype = require('../lib/airplayPrototype').AirPlayPrototype;
 var generateTone = require('../lib/airplayPrototype').generateTone;
 var ffmpegFileArgs = require('../lib/airplayPrototype').ffmpegFileArgs;
@@ -251,6 +252,66 @@ async function main() {
     'a broken AirPlay command pipe must be detached without terminating Volumio');
   assert(warnings.some(function (message) { return message.indexOf('broken pipe') !== -1; }),
     'a broken AirPlay command pipe must leave a concise diagnostic warning');
+
+  var commandWrites = [];
+  var transitionBridge = new AirPlayLiveBridge();
+  transitionBridge.ready = true;
+  transitionBridge.commandWriter = {
+    destroyed: false,
+    write: function (command) { commandWrites.push(command); return true; }
+  };
+  var transition = transitionBridge.transition({
+    title: 'Next\nTrack', artist: 'Artist', album: 'Album', duration: 180.4
+  });
+  await new Promise(function (resolve) { setImmediate(resolve); });
+  assert.deepStrictEqual(commandWrites, ['ACTION=FLUSH\n'],
+    'a track transition must clear stale receiver audio before starting new audio');
+  transitionBridge._consumeStatus('stderr', Buffer.from('[STATUS] audio buffered_ms=500\n'));
+  await new Promise(function (resolve) { setImmediate(resolve); });
+  assert.deepStrictEqual(commandWrites, ['ACTION=FLUSH\n'],
+    'buffered audio reported before flush completes must not start the new position');
+  transitionBridge._consumeStatus('stderr', Buffer.from('[STATUS] flu'));
+  transitionBridge._consumeStatus('stderr', Buffer.from('shed\n[STATUS] audio buffered_ms=92\n'));
+  await new Promise(function (resolve) { setImmediate(resolve); });
+  assert(commandWrites[1].indexOf('TITLE=Next Track\n') === 0 &&
+    commandWrites[1].indexOf('DURATION=180\nACTION=SENDMETA\n') !== -1,
+  'a track transition must send sanitised metadata after the fresh audio is buffered');
+  assert.strictEqual(commandWrites[2], 'START_UNIX_MS=0\nACTION=START\n');
+  transitionBridge._consumeStatus('stdout', Buffer.from('[STATUS] started requested_unix_ms=0\n'));
+  await transition;
+  await transitionBridge.pause();
+  await transitionBridge.resume();
+  assert.deepStrictEqual(commandWrites.slice(-2), ['ACTION=PAUSE\n', 'ACTION=PLAY\n'],
+    'pause and resume must use transport commands without putting the sender into standby');
+  var now = 1000;
+  var stateActions = [];
+  var playbackController = new AirPlayPlaybackController({
+    bridge: {
+      transition: async function (meta) { stateActions.push('transition:' + meta.title); },
+      pause: async function () { stateActions.push('pause'); },
+      resume: async function () { stateActions.push('resume'); },
+      getStatus: function () { return { audioStarted: true }; }
+    },
+    isActive: function () { return true; },
+    now: function () { return now; }
+  });
+  await playbackController.handle({ status: 'play', uri: 'one.flac', seek: 1000, title: 'One' });
+  now += 1000;
+  await playbackController.handle({ status: 'play', uri: 'one.flac', seek: 2000, title: 'One' });
+  now += 100;
+  await playbackController.handle({
+    status: 'play', uri: 'mnt/one.flac', seek: 2100, title: 'One', artist: 'Refined artist'
+  });
+  await playbackController.handle({ status: 'pause', uri: 'one.flac', seek: 2000, title: 'One' });
+  await playbackController.handle({ status: 'play', uri: 'one.flac', seek: 2000, title: 'One' });
+  now += 100;
+  await playbackController.handle({ status: 'play', uri: 'two.flac', seek: 0, title: 'Two' });
+  now += 100;
+  await playbackController.handle({ status: 'play', uri: 'two.flac', seek: 30000, title: 'Two' });
+  await playbackController.handle({ status: 'stop', uri: 'two.flac', seek: 30000, title: 'Two' });
+  assert.deepStrictEqual(stateActions, [
+    'pause', 'resume', 'transition:Two', 'transition:Two'
+  ], 'pause/resume and warm transitions may control the sender without mistaking Volumio URI aliases for new tracks');
 
   console.log('AirPlay prototype tests passed');
 }

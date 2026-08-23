@@ -51,6 +51,9 @@ function AirPlayLiveBridge(options) {
   this.commandWriter = null;
   this.exitPromise = null;
   this.output = '';
+  this.statusRemainders = { stdout: '', stderr: '' };
+  this.statusWaiters = [];
+  this.transitionPromise = Promise.resolve();
   this.ready = false;
   this.audioStarted = false;
   this.stopping = false;
@@ -73,6 +76,127 @@ AirPlayLiveBridge.prototype._writeCommand = function (command) {
     this.logger.warn('Unable to write to AirPlay command pipe: ' + error.message);
     return false;
   }
+};
+
+AirPlayLiveBridge.prototype._requireCommand = function (command) {
+  if (!this.commandWriter || this.commandWriter.destroyed) {
+    throw new Error('The AirPlay control channel is not available');
+  }
+  this._writeCommand(command);
+};
+
+AirPlayLiveBridge.prototype._consumeStatus = function (source, chunk) {
+  var self = this;
+  var text = self.statusRemainders[source] + chunk.toString('utf8');
+  var lines = text.split(/\r?\n/);
+  self.statusRemainders[source] = lines.pop();
+  lines.forEach(function (line) {
+    self.statusWaiters.slice().forEach(function (waiter) {
+      var pattern = waiter.patterns ? waiter.patterns[waiter.position] : waiter.pattern;
+      if (!pattern.test(line)) return;
+      if (waiter.patterns && waiter.position + 1 < waiter.patterns.length) {
+        waiter.position += 1;
+        return;
+      }
+      var index = self.statusWaiters.indexOf(waiter);
+      if (index !== -1) self.statusWaiters.splice(index, 1);
+      clearTimeout(waiter.timer);
+      waiter.resolve(line);
+    });
+  });
+};
+
+AirPlayLiveBridge.prototype._waitForStatusSequence = function (patterns, timeoutMs, message) {
+  var self = this;
+  var waiter;
+  var promise = new Promise(function (resolve, reject) {
+    waiter = { patterns: patterns, position: 0, resolve: resolve, reject: reject, timer: null };
+    waiter.timer = setTimeout(function () {
+      var index = self.statusWaiters.indexOf(waiter);
+      if (index !== -1) self.statusWaiters.splice(index, 1);
+      reject(new Error(message));
+    }, timeoutMs);
+    self.statusWaiters.push(waiter);
+  });
+  promise.cancel = function () {
+    var index = self.statusWaiters.indexOf(waiter);
+    if (index !== -1) self.statusWaiters.splice(index, 1);
+    clearTimeout(waiter.timer);
+  };
+  return promise;
+};
+
+AirPlayLiveBridge.prototype._waitForStatus = function (pattern, timeoutMs, message) {
+  var self = this;
+  var waiter;
+  var promise = new Promise(function (resolve, reject) {
+    waiter = { pattern: pattern, resolve: resolve, reject: reject, timer: null };
+    waiter.timer = setTimeout(function () {
+      var index = self.statusWaiters.indexOf(waiter);
+      if (index !== -1) self.statusWaiters.splice(index, 1);
+      reject(new Error(message));
+    }, timeoutMs);
+    self.statusWaiters.push(waiter);
+  });
+  promise.cancel = function () {
+    var index = self.statusWaiters.indexOf(waiter);
+    if (index !== -1) self.statusWaiters.splice(index, 1);
+    clearTimeout(waiter.timer);
+  };
+  return promise;
+};
+
+AirPlayLiveBridge.prototype._rejectStatusWaiters = function (error) {
+  this.statusWaiters.splice(0).forEach(function (waiter) {
+    clearTimeout(waiter.timer);
+    waiter.reject(error);
+  });
+};
+
+AirPlayLiveBridge.prototype._metadataCommands = function (metadata) {
+  metadata = metadata || {};
+  function clean(value) { return String(value || '').replace(/[\r\n]+/g, ' ').trim(); }
+  var duration = Math.max(0, Math.round(Number(metadata.duration) || 0));
+  return 'TITLE=' + (clean(metadata.title) || 'Volumio playback') + '\n' +
+    'ARTIST=' + (clean(metadata.artist) || 'Wireless Output Manager') + '\n' +
+    'ALBUM=' + clean(metadata.album) + '\n' +
+    'DURATION=' + duration + '\nACTION=SENDMETA\n';
+};
+
+AirPlayLiveBridge.prototype.transition = function (metadata) {
+  var self = this;
+  var operation = self.transitionPromise.catch(function () {}).then(async function () {
+    if (!self.ready) throw new Error('The AirPlay session is not ready');
+    var freshAudio = self._waitForStatusSequence([
+      /\[STATUS\]\s+flushed\b/i,
+      /\[STATUS\]\s+audio\s+buffered_ms=/i
+    ], 10000, 'AirPlay did not clear its previous audio and receive the new audio in time');
+    var started;
+    try {
+      self._requireCommand('ACTION=FLUSH\n');
+      await freshAudio;
+      self._requireCommand(self._metadataCommands(metadata));
+      started = self._waitForStatus(/\[STATUS\]\s+started\b/i, 5000,
+        'AirPlay did not confirm the new playback position');
+      self._requireCommand('START_UNIX_MS=0\nACTION=START\n');
+      await started;
+    } finally {
+      freshAudio.cancel();
+      if (started) started.cancel();
+    }
+  });
+  self.transitionPromise = operation;
+  return operation;
+};
+
+AirPlayLiveBridge.prototype.pause = function () {
+  this._requireCommand('ACTION=PAUSE\n');
+  return Promise.resolve();
+};
+
+AirPlayLiveBridge.prototype.resume = function () {
+  this._requireCommand('ACTION=PLAY\n');
+  return Promise.resolve();
 };
 
 AirPlayLiveBridge.prototype._safeDirectory = async function () {
@@ -148,19 +272,22 @@ AirPlayLiveBridge.prototype.start = async function (receiver, options) {
     var connected = new Promise(function (resolve) { connectedResolve = resolve; });
     var audioReady = new Promise(function (resolve) { audioResolve = resolve; });
     self.output = '';
+    self.statusRemainders = { stdout: '', stderr: '' };
+    self._rejectStatusWaiters(new Error('The previous AirPlay session ended'));
     self.audioStarted = false;
     self.child = self.spawn(sender.binary, args, { stdio: [descriptor, 'pipe', 'pipe'] });
     fs.close(descriptor, function () {});
     descriptor = null;
 
-    function inspect(chunk) {
+    function inspect(source, chunk) {
       var text = chunk.toString('utf8');
       self.output = (self.output + text).slice(-128 * 1024);
+      self._consumeStatus(source, chunk);
       if (/\[STATUS\]\s+connected/i.test(text)) connectedResolve();
       if (/\[STATUS\]\s+audio\b/i.test(text)) audioResolve();
     }
-    self.child.stdout.on('data', inspect);
-    self.child.stderr.on('data', inspect);
+    self.child.stdout.on('data', function (chunk) { inspect('stdout', chunk); });
+    self.child.stderr.on('data', function (chunk) { inspect('stderr', chunk); });
     self.exitPromise = new Promise(function (resolve) {
       self.child.once('error', function (error) { resolve({ error: error }); });
       self.child.once('close', function (code, signal) {
@@ -170,6 +297,7 @@ AirPlayLiveBridge.prototype.start = async function (receiver, options) {
         };
         var unexpected = self.ready && !self.stopping;
         self.ready = false;
+        self._rejectStatusWaiters(outcome.error || new Error('The AirPlay sender stopped'));
         resolve(outcome);
         if (unexpected) {
           Promise.resolve().then(function () { return self.onUnexpectedExit(outcome); })
@@ -191,9 +319,7 @@ AirPlayLiveBridge.prototype.start = async function (receiver, options) {
     audioReady.then(function () {
       if (!self.commandWriter || self.audioStarted) return;
       self.audioStarted = true;
-      self._writeCommand('TITLE=Volumio playback\n');
-      self._writeCommand('ARTIST=Wireless Output Manager\n');
-      self._writeCommand('DURATION=0\nACTION=SENDMETA\n');
+      self._writeCommand(self._metadataCommands());
       self._writeCommand('START_UNIX_MS=0\nACTION=START\n');
     });
     return {
@@ -214,6 +340,7 @@ AirPlayLiveBridge.prototype.stop = async function () {
   self.stopping = true;
   try {
     self.ready = false;
+    self._rejectStatusWaiters(new Error('The AirPlay session was stopped'));
     if (self.commandWriter) {
       var commandWriter = self.commandWriter;
       self.commandWriter = null;
@@ -236,6 +363,8 @@ AirPlayLiveBridge.prototype.stop = async function () {
     self.child = null;
     self.exitPromise = null;
     self.audioStarted = false;
+    self.statusRemainders = { stdout: '', stderr: '' };
+    self.transitionPromise = Promise.resolve();
     await self._cleanRuntime();
   } finally {
     self.stopping = false;
