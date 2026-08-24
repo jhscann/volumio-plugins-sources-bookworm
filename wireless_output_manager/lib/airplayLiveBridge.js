@@ -199,6 +199,16 @@ AirPlayLiveBridge.prototype.resume = function () {
   return Promise.resolve();
 };
 
+AirPlayLiveBridge.prototype.setVolume = function (volume) {
+  volume = Number(volume);
+  if (!Number.isFinite(volume) || volume < 0 || volume > this.maximumVolume) {
+    throw new Error('AirPlay receiver volume must be between 0 and ' + this.maximumVolume + '%');
+  }
+  if (!this.ready) throw new Error('The AirPlay session is not ready');
+  this._requireCommand('VOLUME=' + Math.round(volume) + '\n');
+  return Promise.resolve(Math.round(volume));
+};
+
 AirPlayLiveBridge.prototype._safeDirectory = async function () {
   var existing = await fs.lstat(this.runtimeDir).catch(function () { return null; });
   if (existing && (!existing.isDirectory() || existing.isSymbolicLink())) {
@@ -265,7 +275,10 @@ AirPlayLiveBridge.prototype.start = async function (receiver, options) {
   try {
     var sender = await self.adapter.checkSender();
     var sourceAddress = await self.adapter.getSourceAddress(receiver.address);
-    var args = self.adapter.buildSenderArgs(receiver, self.commandFifo, Math.round(volume), sourceAddress);
+    var args = self.adapter.buildSenderArgs(receiver, self.commandFifo, Math.round(volume), sourceAddress, {
+      auth: options.auth || '',
+      secret: options.secret || ''
+    });
     descriptor = await openFifoReadWrite(self.audioFifo);
     var connectedResolve;
     var audioResolve;

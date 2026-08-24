@@ -8,9 +8,21 @@
       "icon": "fa-volume-up",
       "description": "TRANSLATE.CURRENT_OUTPUT_NOTE",
       "content": [
-        {"id": "createOutput", "element": "button", "label": "TRANSLATE.PLAY_ON_WIRELESS", "onClick": {"type": "plugin", "endpoint": "system_hardware/wireless_output_manager", "method": "createBluetoothOutput", "data": []}},
-        {"id": "createAirPlayOutput", "element": "button", "label": "TRANSLATE.PLAY_ON_AIRPLAY", "onClick": {"type": "plugin", "endpoint": "system_hardware/wireless_output_manager", "method": "createAirPlayOutput", "data": []}},
-        {"id": "removeOutput", "element": "button", "label": "TRANSLATE.PLAY_ON_DEFAULT", "onClick": {"type": "plugin", "endpoint": "system_hardware/wireless_output_manager", "method": "removeBluetoothOutput", "data": []}}
+        {"id": "currentOutputStatus", "element": "text", "label": "Output: Default"},
+        {"id": "selectedBluetoothStatus", "element": "text", "label": "Bluetooth: None selected"},
+        {"id": "selectedAirPlayStatus", "element": "text", "label": "AirPlay: None selected"},
+        {"id": "removeOutput", "element": "button", "label": "TRANSLATE.PLAY_ON_DEFAULT", "hidden": true, "onClick": {"type": "plugin", "endpoint": "system_hardware/wireless_output_manager", "method": "removeBluetoothOutput", "data": []}}
+      ]
+    },
+    {
+      "id": "outputSettings",
+      "element": "section",
+      "label": "TRANSLATE.OUTPUT_SETTINGS",
+      "icon": "fa-sliders",
+      "description": "TRANSLATE.OUTPUT_SETTINGS_NOTE",
+      "content": [
+        {"id": "showBluetoothSettings", "element": "button", "label": "TRANSLATE.OPEN_BLUETOOTH_SETTINGS", "hidden": true, "onClick": {"type": "plugin", "endpoint": "system_hardware/wireless_output_manager", "method": "showBluetoothSettings", "data": []}},
+        {"id": "showAirPlaySettings", "element": "button", "label": "TRANSLATE.OPEN_AIRPLAY_SETTINGS", "onClick": {"type": "plugin", "endpoint": "system_hardware/wireless_output_manager", "method": "showAirPlaySettings", "data": []}}
       ]
     },
     {
@@ -27,11 +39,23 @@
       ]
     },
     {
+      "id": "bluetoothRouting",
+      "element": "section",
+      "label": "TRANSLATE.BLUETOOTH_PLAYBACK",
+      "icon": "fa-play-circle",
+      "description": "TRANSLATE.BLUETOOTH_PLAYBACK_NOTE",
+      "hidden": true,
+      "content": [
+        {"id": "createOutput", "element": "button", "label": "TRANSLATE.PLAY_ON_WIRELESS", "onClick": {"type": "plugin", "endpoint": "system_hardware/wireless_output_manager", "method": "createBluetoothOutput", "data": []}}
+      ]
+    },
+    {
       "id": "bluetoothSound",
       "element": "section",
       "label": "TRANSLATE.BLUETOOTH_SOUND",
       "icon": "fa-headphones",
       "description": "TRANSLATE.BLUETOOTH_SOUND_NOTE",
+      "hidden": true,
       "onSave": {"type": "controller", "endpoint": "system_hardware/wireless_output_manager", "method": "saveBluetoothSoundSettings"},
       "saveButton": {"label": "TRANSLATE.APPLY_BLUETOOTH_SOUND", "data": ["preferredCodec", "bluetoothDeviceVolume"]},
       "content": [
@@ -54,18 +78,54 @@
       ]
     },
     {
+      "id": "airplayRouting",
+      "element": "section",
+      "label": "TRANSLATE.AIRPLAY_PLAYBACK",
+      "icon": "fa-play-circle",
+      "description": "TRANSLATE.AIRPLAY_PLAYBACK_NOTE",
+      "hidden": true,
+      "content": [
+        {"id": "createAirPlayOutput", "element": "button", "label": "TRANSLATE.PLAY_ON_AIRPLAY", "onClick": {"type": "plugin", "endpoint": "system_hardware/wireless_output_manager", "method": "createAirPlayOutput", "data": []}}
+      ]
+    },
+    {
+      "id": "airplayPairingStart",
+      "element": "section",
+      "label": "TRANSLATE.APPLE_TV_PAIRING",
+      "icon": "fa-link",
+      "description": "TRANSLATE.APPLE_TV_PAIRING_NOTE",
+      "hidden": true,
+      "content": [
+        {"id": "startAirPlayPairing", "element": "button", "label": "TRANSLATE.START_APPLE_TV_PAIRING", "onClick": {"type": "plugin", "endpoint": "system_hardware/wireless_output_manager", "method": "startAirPlayPairing", "data": []}}
+      ]
+    },
+    {
+      "id": "airplayPairingFinish",
+      "element": "section",
+      "label": "TRANSLATE.COMPLETE_APPLE_TV_PAIRING",
+      "icon": "fa-key",
+      "description": "TRANSLATE.APPLE_TV_PIN_NOTE",
+      "hidden": true,
+      "onSave": {"type": "controller", "endpoint": "system_hardware/wireless_output_manager", "method": "finishAirPlayPairing"},
+      "saveButton": {"label": "TRANSLATE.COMPLETE_PAIRING", "data": ["airPlayPairingPin"]},
+      "content": [
+        {"id": "airPlayPairingPin", "element": "input", "type": {"name": "text"}, "label": "TRANSLATE.APPLE_TV_PIN", "description": "TRANSLATE.APPLE_TV_PIN_NOTE", "value": "", "attributes": [{"maxlength": 4}]}
+      ]
+    },
+    {
       "id": "deviceManagement",
       "element": "section",
       "label": "TRANSLATE.DEVICE_MANAGEMENT",
       "icon": "fa-wrench",
       "description": "TRANSLATE.SAVED_SPEAKER_NOTE",
+      "hidden": true,
       "onSave": {"type": "controller", "endpoint": "system_hardware/wireless_output_manager", "method": "forgetDevice"},
       "saveButton": {"label": "TRANSLATE.FORGET_PAIRING", "data": ["pairedDeviceToForget"]},
       "content": [
         {"id": "connectDevice", "element": "button", "label": "TRANSLATE.RECONNECT_DEVICE", "hidden": true, "onClick": {"type": "plugin", "endpoint": "system_hardware/wireless_output_manager", "method": "connectDevice", "data": []}},
         {"id": "disconnectDevice", "element": "button", "label": "TRANSLATE.DISCONNECT_DEVICE", "hidden": true, "onClick": {"type": "plugin", "endpoint": "system_hardware/wireless_output_manager", "method": "disconnectDevice", "data": []}},
-        {"id": "pairedDeviceToForget", "element": "select", "label": "TRANSLATE.PAIRED_AUDIO_DEVICES", "description": "TRANSLATE.FORGET_SPEAKER_NOTE", "value": {"value": "", "label": "Select a paired audio device"}, "options": []},
-        {"id": "resetSpeakerSetup", "element": "button", "label": "TRANSLATE.RESET_PLUGIN_SETUP", "description": "TRANSLATE.RESET_PLUGIN_SETUP_NOTE", "onClick": {"type": "plugin", "endpoint": "system_hardware/wireless_output_manager", "method": "resetSpeakerSetup", "data": []}}
+        {"id": "pairedDeviceToForget", "element": "select", "label": "TRANSLATE.PAIRED_AUDIO_DEVICES", "description": "TRANSLATE.FORGET_SPEAKER_NOTE", "value": {"value": "", "label": "Select a paired audio device"}, "options": [], "hidden": true},
+        {"id": "resetSpeakerSetup", "element": "button", "label": "TRANSLATE.RESET_PLUGIN_SETUP", "description": "TRANSLATE.RESET_PLUGIN_SETUP_NOTE", "hidden": true, "onClick": {"type": "plugin", "endpoint": "system_hardware/wireless_output_manager", "method": "resetSpeakerSetup", "data": []}}
       ]
     },
     {

@@ -10,6 +10,23 @@ var WirelessOutputManager = require('../index');
 
 async function main() {
   var uiConfig = require('../UIConfig.json');
+  var packageConfig = require('../package.json');
+  function sectionById(sectionId) {
+    return uiConfig.sections.find(function (section) { return section.id === sectionId; });
+  }
+  function controlById(sectionId, controlId) {
+    return sectionById(sectionId).content.find(function (control) { return control.id === controlId; });
+  }
+  function sectionPath(sectionId) {
+    return 'sections[' + uiConfig.sections.findIndex(function (section) { return section.id === sectionId; }) + ']';
+  }
+  function controlPath(sectionId, controlId) {
+    var section = sectionById(sectionId);
+    return sectionPath(sectionId) + '.content[' + section.content.findIndex(function (control) { return control.id === controlId; }) + ']';
+  }
+  function sectionIn(config, sectionId) {
+    return config.sections.find(function (section) { return section.id === sectionId; });
+  }
   var uiIds = uiConfig.sections.reduce(function (ids, section) {
     return ids.concat(section.content.map(function (item) { return item.id; }));
   }, []);
@@ -18,14 +35,26 @@ async function main() {
   assert(uiIds.indexOf('createOutput') !== -1 && uiIds.indexOf('removeOutput') !== -1, 'manual audio destination controls must remain available');
   assert(uiIds.indexOf('bluetoothDeviceVolume') !== -1 && uiIds.indexOf('volumioSoftwareVolume') === -1,
     'the UI must expose Bluetooth stream volume without presenting Volumio volume as dependable Bluetooth control');
-  assert.strictEqual(uiConfig.sections[2].onSave.method, 'saveBluetoothSoundSettings',
+  assert.strictEqual(sectionById('bluetoothSound').onSave.method, 'saveBluetoothSoundSettings',
     'codec and Bluetooth stream volume must share one device-specific section save');
-  assert.deepStrictEqual(uiConfig.sections[2].saveButton.data,
+  assert.deepStrictEqual(sectionById('bluetoothSound').saveButton.data,
     ['preferredCodec', 'bluetoothDeviceVolume']);
-  assert.deepStrictEqual(uiConfig.sections[2].content[1].type, { name: 'number' },
+  assert.deepStrictEqual(controlById('bluetoothSound', 'bluetoothDeviceVolume').type, { name: 'number' },
     'Bluetooth stream volume must use Volumio native number-input definitions');
   assert.strictEqual(uiConfig.sections[0].id, 'currentOutput', 'output and recovery controls must remain first');
-  assert.strictEqual(uiConfig.sections[0].content[2].id, 'removeOutput', 'return-to-default recovery must always be present');
+  assert.strictEqual(packageConfig.volumio_info.icon, 'fa-share-alt',
+    'the plugin icon must represent routing across multiple wireless protocols');
+  assert.strictEqual(controlById('currentOutput', 'currentOutputStatus').element, 'text',
+    'current output must use a prominent native text row');
+  assert.strictEqual(controlById('currentOutput', 'selectedBluetoothStatus').element, 'text',
+    'selected Bluetooth device must use a prominent native text row');
+  assert.strictEqual(controlById('currentOutput', 'selectedAirPlayStatus').element, 'text',
+    'selected AirPlay receiver must use a prominent native text row');
+  assert.strictEqual(controlById('currentOutput', 'removeOutput').id, 'removeOutput', 'return-to-default recovery must always be present');
+  assert(controlById('outputSettings', 'showBluetoothSettings') && controlById('outputSettings', 'showAirPlaySettings'),
+    'settings navigation must expose Bluetooth and AirPlay views');
+  assert(controlById('bluetoothRouting', 'createOutput'), 'Bluetooth routing must follow Bluetooth device setup');
+  assert(controlById('airplayRouting', 'createAirPlayOutput'), 'AirPlay routing must follow AirPlay receiver setup');
   assert(uiIds.indexOf('discoverAirPlayReceivers') !== -1 &&
     uiIds.indexOf('preferredAirPlayReceiver') !== -1 && uiIds.indexOf('createAirPlayOutput') !== -1,
   'AirPlay must expose discovery, selection and a separate manual routing action');
@@ -80,6 +109,28 @@ async function main() {
     /did not report an A2DP playback volume/);
 
   var volumePayloadPlugin = new WirelessOutputManager({ coreCommand: {}, logger: {}, configManager: {} });
+  volumePayloadPlugin.config = {
+    get: function (key) {
+      if (key === 'airPlayAuthCredentials') return JSON.stringify({ MODERN: 'ab'.repeat(96) });
+      if (key === 'airPlayRaopCredentials') return JSON.stringify({ LEGACY: 'cd'.repeat(32) });
+      return undefined;
+    }
+  };
+  assert.deepStrictEqual(volumePayloadPlugin._airPlayPairingDiagnostic('RAOP', 'ShairportSync'), {
+    selectedPairingType: 'not-required',
+    selectedReceiverRequiresPairing: false,
+    selectedReceiverPaired: null
+  }, 'third-party RAOP receivers must not be diagnosed as unpaired AirPlay 2 devices');
+  assert.deepStrictEqual(volumePayloadPlugin._airPlayPairingDiagnostic('LEGACY', 'AppleTV3,2'), {
+    selectedPairingType: 'legacy-raop-pin',
+    selectedReceiverRequiresPairing: true,
+    selectedReceiverPaired: true
+  }, 'older Apple TVs must report their separate legacy pairing state');
+  assert.deepStrictEqual(volumePayloadPlugin._airPlayPairingDiagnostic('MODERN', 'AppleTV5,3'), {
+    selectedPairingType: 'airplay2-hap-pin',
+    selectedReceiverRequiresPairing: true,
+    selectedReceiverPaired: true
+  }, 'current Apple TVs must report their AirPlay 2 HAP pairing state');
   assert.strictEqual(volumePayloadPlugin._submittedNumber(
     { bluetoothDeviceVolume: { value: 20 } }, 'bluetoothDeviceVolume', 'Bluetooth device volume'), 20);
   assert.strictEqual(volumePayloadPlugin._submittedNumber(
@@ -508,7 +559,7 @@ async function main() {
   var routeState = { preferredDeviceMac: '34:DF:2A:4F:74:F5', outputEnabled: false };
   var routePlugin = new WirelessOutputManager({ coreCommand: {}, logger: {}, configManager: {} });
   routePlugin.btLog = { info: function () {}, warn: function () {}, error: function () {} };
-  routePlugin.log = { info: function () {}, warn: function () {} };
+  routePlugin.log = { info: function () {}, warn: function () {}, error: function () {} };
   routePlugin._toast = function () {};
   routePlugin.config = {
     get: function (key) { return routeState[key]; },
@@ -553,11 +604,14 @@ async function main() {
   routeState.preferredAirPlayName = 'Living Room';
   routeState.preferredAirPlayAddress = '192.168.1.50';
   routeState.airPlayReceiverVolume = 20;
+  routeState.airPlayAuthCredentials = '{}';
+  routeState.airPlayRaopCredentials = '{}';
+  var routeAirPlayModel = '';
   routePlugin.airplayReceivers = [];
   routePlugin._loadAirPlayReceivers = async function () {
     routePlugin.airplayReceivers = [{
       id: 'AA:BB:CC:DD:EE:01', name: 'Living Room', address: '192.168.1.50',
-      addresses: ['192.168.1.50'], protocols: ['airplay2', 'raop']
+      addresses: ['192.168.1.50'], protocols: ['airplay2', 'raop'], model: routeAirPlayModel
     }];
     routeCalls.push('discover-airplay');
     return routePlugin.airplayReceivers;
@@ -596,12 +650,104 @@ async function main() {
   };
   var unavailableReceiverResult = await routePlugin.createAirPlayOutput();
   assert.strictEqual(unavailableReceiverResult.success, false);
-  assert(/Could not start AirPlay to Living Room.*Wait a few seconds/.test(unavailableReceiverResult.message),
+  assert(/Could not start AirPlay to Living Room.*Check that it is awake/.test(unavailableReceiverResult.message),
     'temporary receiver startup failures must use a concise retry message');
   assert(unavailableReceiverResult.message.indexOf('low-level diagnostic') === -1,
     'raw sender diagnostics must not escape into the user-facing toast');
 
   routeCalls = [];
+  routeAirPlayModel = 'AudioAccessory1,1';
+  routePlugin.airplay = {
+    prepareReceiver: async function () { routeCalls.push('prepare-homepod'); }
+  };
+  routePlugin.airplayBridge.start = async function (receiver, options) {
+    routeCalls.push('homepod-sender');
+    return { fifo: '/tmp/wom-airplay/audio.pcm', address: options.address };
+  };
+  await routePlugin.createAirPlayOutput();
+  assert(routeCalls.indexOf('prepare-homepod') < routeCalls.indexOf('stop'),
+    'HomePod readiness must be checked before current playback is stopped');
+  assert(routeCalls.indexOf('homepod-sender') > routeCalls.indexOf('stop'),
+    'HomePod sender must start only after readiness and guarded playback stop');
+
+  routeCalls = [];
+  routeState.outputEnabled = false;
+  routeState.activeBackend = '';
+  routePlugin.airplay.prepareReceiver = async function () {
+    routeCalls.push('prepare-homepod');
+    throw new Error('not ready');
+  };
+  var sleepingHomePodResult = await routePlugin.createAirPlayOutput();
+  assert.strictEqual(sleepingHomePodResult.success, false);
+  assert(/Wake it by tapping the top/.test(sleepingHomePodResult.message));
+  assert.strictEqual(routeCalls.indexOf('stop'), -1,
+    'an unavailable HomePod must be rejected before current playback is stopped');
+
+  routeCalls = [];
+  routeAirPlayModel = 'AppleTV5,3';
+  routeState.airPlayAuthCredentials = '{}';
+  routePlugin.airplayBridge.start = async function () {
+    throw new Error('an unpaired Apple TV must not start its sender');
+  };
+  var unpairedAppleTvResult = await routePlugin.createAirPlayOutput();
+  assert.strictEqual(unpairedAppleTvResult.success, false);
+  assert(/must be paired before playback/.test(unpairedAppleTvResult.message));
+  assert.strictEqual(routeCalls.indexOf('stop'), -1,
+    'an unpaired Apple TV must be rejected before current playback is stopped');
+
+  routeCalls = [];
+  var appleTvCredentials = 'cd'.repeat(96);
+  routeState.airPlayAuthCredentials = JSON.stringify({
+    'AA:BB:CC:DD:EE:01': appleTvCredentials
+  });
+  routePlugin.airplayBridge.start = async function (receiver, options) {
+    assert.strictEqual(options.auth, appleTvCredentials,
+      'paired Apple TV playback must receive its saved credentials');
+    assert.strictEqual(options.secret, '',
+      'modern Apple TV playback must not receive legacy RAOP credentials');
+    routeCalls.push('paired-apple-tv-sender');
+    return { fifo: '/tmp/wom-airplay/audio.pcm', address: options.address };
+  };
+  routePlugin.airplayBridge.getStatus = function () { return { running: true, ready: true }; };
+  await routePlugin.createAirPlayOutput();
+  assert(routeCalls.indexOf('paired-apple-tv-sender') !== -1,
+    'a paired Apple TV must proceed through normal guarded routing');
+
+  routeCalls = [];
+  routeState.outputEnabled = false;
+  routeState.activeBackend = '';
+  routeAirPlayModel = 'AppleTV3,2';
+  routeState.airPlayRaopCredentials = '{}';
+  routePlugin.airplayBridge.start = async function () {
+    throw new Error('an unpaired legacy Apple TV must not start its sender');
+  };
+  var unpairedLegacyAppleTvResult = await routePlugin.createAirPlayOutput();
+  assert.strictEqual(unpairedLegacyAppleTvResult.success, false);
+  assert(/paired before playback using legacy AirPlay/.test(unpairedLegacyAppleTvResult.message));
+  assert.strictEqual(routeCalls.indexOf('stop'), -1,
+    'an unpaired legacy Apple TV must be rejected before current playback is stopped');
+
+  routeCalls = [];
+  var raopSecret = 'ef'.repeat(32);
+  routeState.airPlayRaopCredentials = JSON.stringify({
+    'AA:BB:CC:DD:EE:01': raopSecret
+  });
+  routePlugin.airplayBridge.start = async function (receiver, options) {
+    assert.strictEqual(options.auth, '',
+      'legacy Apple TV playback must not receive AirPlay 2 credentials');
+    assert.strictEqual(options.secret, raopSecret,
+      'legacy Apple TV playback must receive its separately saved RAOP secret');
+    routeCalls.push('paired-legacy-apple-tv-sender');
+    return { fifo: '/tmp/wom-airplay/audio.pcm', address: options.address };
+  };
+  await routePlugin.createAirPlayOutput();
+  assert(routeCalls.indexOf('paired-legacy-apple-tv-sender') !== -1,
+    'a paired legacy Apple TV must proceed through normal guarded routing');
+
+  routeCalls = [];
+  routeAirPlayModel = '';
+  routeState.airPlayAuthCredentials = '{}';
+  routeState.airPlayRaopCredentials = '{}';
   routeState.outputEnabled = true;
   routeState.activeBackend = 'airplay';
   await routePlugin._handleUnexpectedAirPlayExit({ error: new Error('network lost') });
@@ -1037,21 +1183,31 @@ async function main() {
   await plugin.resetSpeakerSetup();
   assert.strictEqual(onboardingSaved.preferredDeviceMac, '');
   assert.strictEqual(onboardingSaved.enabled, false);
+  assert.strictEqual(onboardingSaved.airPlayAuthCredentials, '{}');
+  assert.strictEqual(onboardingSaved.airPlayRaopCredentials, '{}');
   assert.deepStrictEqual(plugin.devices, []);
 
   var uiWrites = {};
   var uiOptionWrites = {};
+  var pushedUIConfigs = [];
   var uiValues = {
     preferredDeviceMac: 'C4:30:18:EA:9D:EC',
     preferredDeviceName: 'JBL PartyBox 100',
     outputEnabled: false,
+    settingsView: 'bluetooth',
     autoReconnect: true,
     debugLogging: false,
+    airPlayRaopCredentials: '{}',
     codecPreferences: '{"C4:30:18:EA:9D:EC":"AUTO"}'
   };
   plugin.commandRouter = {
     sharedVars: { get: function () { return 'en'; } },
-    i18nJson: function () { return Promise.resolve(JSON.parse(JSON.stringify(uiConfig))); }
+    i18nJson: function () { return Promise.resolve(JSON.parse(JSON.stringify(uiConfig))); },
+    broadcastMessage: function (message, value) {
+      assert.strictEqual(message, 'pushUiConfig');
+      pushedUIConfigs.push(value);
+      return Promise.resolve();
+    }
   };
   plugin.configManager = {
     setUIConfigParam: function (ui, path, value) { uiWrites[path] = value; },
@@ -1060,7 +1216,10 @@ async function main() {
       uiOptionWrites[path].push(value);
     }
   };
-  plugin.config = { get: function (key) { return uiValues[key]; } };
+  plugin.config = {
+    get: function (key) { return uiValues[key]; },
+    set: function (key, value) { uiValues[key] = value; }
+  };
   plugin.codecManager = {
     normalize: function (value) { return value || 'AUTO'; },
     displayName: function (value) { return value === 'APTX-HD' ? 'aptX HD' : (value === 'APTX' ? 'aptX' : (value || 'unknown')); },
@@ -1077,29 +1236,65 @@ async function main() {
     };
   } };
   plugin.devices = [];
-  await plugin.getUIConfig();
-  assert(/Music output: the default device/.test(uiWrites['sections[0].description']),
-    'current output status must remain visible for a saved device');
-  assert(/three points.*Volumio volume.*Bluetooth stream volume.*own volume/i.test(uiWrites['sections[0].description']),
+  var freshlyOpenedUI = await plugin.getUIConfig();
+  assert.strictEqual(uiValues.settingsView, 'overview',
+    'opening settings on the default output must reset the remembered settings view');
+  assert.strictEqual(sectionIn(freshlyOpenedUI, 'bluetoothDevices').hidden, true);
+  assert.strictEqual(sectionIn(freshlyOpenedUI, 'airplayReceivers').hidden, true);
+  assert.strictEqual(sectionIn(freshlyOpenedUI, 'outputSettings').content.find(function (control) {
+    return control.id === 'showBluetoothSettings';
+  }).hidden, false);
+  assert.strictEqual(sectionIn(freshlyOpenedUI, 'outputSettings').content.find(function (control) {
+    return control.id === 'showAirPlaySettings';
+  }).hidden, false);
+  uiValues.settingsView = 'bluetooth';
+  var renderedUI = await plugin.getUIConfig({ preserveSettingsView: true });
+  var currentOutputPath = sectionPath('currentOutput');
+  var bluetoothDevicesPath = sectionPath('bluetoothDevices');
+  assert.strictEqual(uiWrites[controlPath('currentOutput', 'currentOutputStatus') + '.label'],
+    'Output: Default');
+  assert.strictEqual(uiWrites[controlPath('currentOutput', 'selectedBluetoothStatus') + '.label'],
+    'Bluetooth: JBL PartyBox 100 · Audio ready');
+  assert.strictEqual(uiWrites[controlPath('currentOutput', 'selectedAirPlayStatus') + '.label'],
+    'AirPlay: None selected');
+  assert(/three points.*Volumio volume.*Bluetooth stream volume.*own volume/i.test(uiWrites[currentOutputPath + '.description']),
     'the first section must explain all three Bluetooth loudness controls');
-  assert(/Keep headphones off your head/i.test(uiWrites['sections[0].description']),
+  assert(/Keep headphones off your head/i.test(uiWrites[currentOutputPath + '.description']),
     'the first section must show the headphones setup safety warning');
-  assert.strictEqual(uiWrites['sections[4].content[0].hidden'], true, 'reconnect must hide while connected');
-  assert.strictEqual(uiWrites['sections[4].content[1].hidden'], false, 'disconnect must show while connected');
-  assert(uiWrites['sections[2].content[0].options'].some(function (option) {
+  assert.strictEqual(uiWrites[controlPath('deviceManagement', 'connectDevice') + '.hidden'], true, 'reconnect must hide while connected');
+  assert.strictEqual(uiWrites[controlPath('deviceManagement', 'disconnectDevice') + '.hidden'], false, 'disconnect must show while connected');
+  assert(uiWrites[controlPath('bluetoothSound', 'preferredCodec') + '.options'].some(function (option) {
     return option.value === 'APTX' && option.label === 'aptX';
   }), 'codec selector must expose standard aptX with a human-readable label');
-  assert(uiWrites['sections[2].content[0].options'].some(function (option) {
+  assert(uiWrites[controlPath('bluetoothSound', 'preferredCodec') + '.options'].some(function (option) {
     return option.value === 'APTX-HD' && option.label === 'aptX HD — high quality';
   }), 'codec selector must expose aptX HD with a human-readable label');
+  assert.strictEqual(Boolean(sectionIn(renderedUI, 'bluetoothDevices').hidden), false,
+    'Bluetooth settings must be visible in the Bluetooth view');
+  assert.strictEqual(sectionIn(renderedUI, 'airplayReceivers').hidden, true,
+    'AirPlay settings must be hidden in the Bluetooth view');
+  assert(/Showing Bluetooth settings/.test(sectionIn(renderedUI, 'outputSettings').description),
+    'the settings selector must clearly identify the visible view');
+  assert.strictEqual(controlById('outputSettings', 'showBluetoothSettings').hidden, true,
+    'the active Bluetooth-view button must be hidden');
+  assert.strictEqual(controlById('outputSettings', 'showAirPlaySettings').hidden, undefined,
+    'the button for opening AirPlay settings must be visible initially');
+  assert.strictEqual(Boolean(sectionIn(renderedUI, 'bluetoothRouting').hidden), false,
+    'Bluetooth routing must appear only after device setup is ready');
+  assert.strictEqual(uiWrites[controlPath('currentOutput', 'removeOutput') + '.hidden'], true,
+    'return-to-default recovery must hide while the default output is active');
 
   uiWrites = {};
   uiValues.outputEnabled = true;
-  await plugin.getUIConfig();
-  assert(/Volumio may display 100%/.test(uiWrites['sections[0].description']),
+  renderedUI = await plugin.getUIConfig();
+  assert.strictEqual(uiWrites[controlPath('currentOutput', 'currentOutputStatus') + '.label'],
+    'Output: Bluetooth — JBL PartyBox 100');
+  assert(/Volumio may display 100%/.test(uiWrites[currentOutputPath + '.description']),
     'active Bluetooth output must explain the known Volumio volume-display behaviour');
-  assert(/no automatic fallback/i.test(uiWrites['sections[0].description']),
+  assert(/no automatic fallback/i.test(uiWrites[currentOutputPath + '.description']),
     'active Bluetooth output must state that fallback is manual');
+  assert.strictEqual(sectionIn(renderedUI, 'bluetoothRouting').hidden, true,
+    'Bluetooth routing action must hide while wireless routing is already active');
 
   uiWrites = {};
   uiOptionWrites = {};
@@ -1109,43 +1304,169 @@ async function main() {
   uiValues.preferredAirPlayName = 'Living Room';
   uiValues.preferredAirPlayAddress = '192.168.1.50';
   uiValues.airPlayReceiverVolume = 20;
+  uiValues.settingsView = 'airplay';
   plugin.airplayReceivers = [{
     id: 'AA:BB:CC:DD:EE:01', name: 'Living Room', address: '192.168.1.50',
     addresses: ['192.168.1.50'], protocols: ['airplay2', 'raop']
   }];
-  await plugin.getUIConfig();
-  assert.strictEqual(uiWrites['sections[0].content[1].hidden'], false,
+  uiValues.outputEnabled = true;
+  uiValues.activeBackend = 'bluetooth';
+  renderedUI = await plugin.getUIConfig();
+  assert.strictEqual(Boolean(sectionIn(renderedUI, 'bluetoothDevices').hidden), false,
+    'an active Bluetooth route must keep the Bluetooth controls open');
+  assert.strictEqual(sectionIn(renderedUI, 'airplayReceivers').hidden, true,
+    'an active Bluetooth route must hide the inactive AirPlay controls');
+  assert.strictEqual(sectionIn(renderedUI, 'airplayRouting').hidden, true,
+    'AirPlay routing must remain hidden while Bluetooth output is active');
+
+  uiWrites = {};
+  uiOptionWrites = {};
+  uiValues.outputEnabled = false;
+  uiValues.activeBackend = '';
+  renderedUI = await plugin.getUIConfig({ preserveSettingsView: true });
+  assert.strictEqual(Boolean(sectionIn(renderedUI, 'airplayRouting').hidden), false,
     'saved AirPlay receivers must expose a separate manual Play action');
-  assert.strictEqual(uiWrites['sections[3].content[2].value'], 20,
+  assert.strictEqual(uiWrites[controlPath('airplayReceivers', 'airPlayReceiverVolume') + '.value'], 20,
     'the settings page must display the saved AirPlay receiver volume');
-  assert(uiOptionWrites['sections[3].content[1].options'].some(function (option) {
+  assert(uiOptionWrites[controlPath('airplayReceivers', 'preferredAirPlayReceiver') + '.options'].some(function (option) {
     return option.value === 'AA:BB:CC:DD:EE:01' && /AirPlay 2, selected/.test(option.label);
   }), 'the AirPlay selector must show protocol and selected state');
+  assert.strictEqual(sectionIn(renderedUI, 'bluetoothDevices').hidden, true,
+    'Bluetooth settings must be hidden in the AirPlay view');
+  assert.strictEqual(Boolean(sectionIn(renderedUI, 'airplayReceivers').hidden), false,
+    'AirPlay settings must be visible in the AirPlay view');
+  assert.strictEqual(sectionIn(renderedUI, 'deviceManagement').hidden, true,
+    'Bluetooth device management must not appear in the AirPlay view');
+  assert.strictEqual(sectionIn(renderedUI, 'behaviour').hidden, true,
+    'Bluetooth behaviour must not appear in the AirPlay view');
+  assert(/Showing AirPlay settings/.test(sectionIn(renderedUI, 'outputSettings').description),
+    'the settings selector must identify the AirPlay view without changing routing');
+  assert.strictEqual(sectionIn(renderedUI, 'outputSettings').content.find(function (control) {
+    return control.id === 'showAirPlaySettings';
+  }).hidden, true, 'the active AirPlay-view button must be hidden');
+  assert.strictEqual(sectionIn(renderedUI, 'outputSettings').content.find(function (control) {
+    return control.id === 'showBluetoothSettings';
+  }).hidden, false, 'the button for returning to Bluetooth settings must be visible');
+
+  uiValues.settingsView = 'overview';
+  renderedUI = await plugin.getUIConfig();
+  assert(/Music is using the default audio output.*Choose an output type/i.test(
+    sectionIn(renderedUI, 'outputSettings').description),
+  'the neutral view must explain that its buttons only open output settings');
+  assert.strictEqual(sectionIn(renderedUI, 'outputSettings').content.find(function (control) {
+    return control.id === 'showBluetoothSettings';
+  }).hidden, false,
+    'the neutral view must offer Bluetooth settings');
+  assert.strictEqual(sectionIn(renderedUI, 'outputSettings').content.find(function (control) {
+    return control.id === 'showAirPlaySettings';
+  }).hidden, false,
+    'the neutral view must offer AirPlay settings');
+  ['bluetoothDevices', 'bluetoothRouting', 'bluetoothSound', 'deviceManagement', 'behaviour',
+    'airplayReceivers', 'airplayRouting', 'airplayPairingStart', 'airplayPairingFinish'].forEach(function (sectionId) {
+    assert.strictEqual(sectionIn(renderedUI, sectionId).hidden, true,
+      'the neutral view must hide protocol-specific section ' + sectionId);
+  });
+  assert.notStrictEqual(sectionIn(renderedUI, 'diagnostics').hidden, true,
+    'troubleshooting must remain available in the neutral view');
+  uiValues.settingsView = 'airplay';
+
+  uiWrites = {};
+  uiOptionWrites = {};
+  uiValues.preferredAirPlayModel = 'AppleTV5,3';
+  uiValues.airPlayAuthCredentials = '{}';
+  plugin.airplayReceivers[0].model = 'AppleTV5,3';
+  plugin.airplayPairing = { getStatus: function () { return { active: false }; } };
+  renderedUI = await plugin.getUIConfig({ preserveSettingsView: true });
+  assert.strictEqual(Boolean(sectionIn(renderedUI, 'airplayPairingStart').hidden), false,
+    'an unpaired Apple TV must expose the start-pairing action');
+  assert.strictEqual(sectionIn(renderedUI, 'airplayPairingFinish').hidden, true,
+    'PIN entry must remain hidden until pairing has started');
+  assert.strictEqual(sectionIn(renderedUI, 'airplayRouting').hidden, true,
+    'Apple TV playback must stay unavailable until pairing credentials exist');
+  assert(/Pair it below before routing music/.test(uiWrites[sectionPath('airplayReceivers') + '.description']),
+    'the Apple TV workflow must explain that pairing precedes routing');
+
+  plugin.airplayPairing = { getStatus: function () {
+    return { active: true, receiverId: 'AA:BB:CC:DD:EE:01', receiverName: 'Living Room' };
+  } };
+  renderedUI = await plugin.getUIConfig({ preserveSettingsView: true });
+  assert.strictEqual(sectionIn(renderedUI, 'airplayPairingStart').hidden, true);
+  assert.strictEqual(Boolean(sectionIn(renderedUI, 'airplayPairingFinish').hidden), false,
+    'PIN entry must appear only for the Apple TV with an active pairing session');
+
+  uiValues.airPlayAuthCredentials = JSON.stringify({
+    'AA:BB:CC:DD:EE:01': 'ab'.repeat(96)
+  });
+  plugin.airplayPairing = { getStatus: function () { return { active: false }; } };
+  renderedUI = await plugin.getUIConfig({ preserveSettingsView: true });
+  assert.strictEqual(Boolean(sectionIn(renderedUI, 'airplayRouting').hidden), false,
+    'paired Apple TV credentials must unlock the manual playback action');
+
+  uiValues.preferredAirPlayModel = 'AppleTV3,2';
+  uiValues.airPlayRaopCredentials = '{}';
+  plugin.airplayReceivers[0].model = 'AppleTV3,2';
+  renderedUI = await plugin.getUIConfig({ preserveSettingsView: true });
+  assert.strictEqual(Boolean(sectionIn(renderedUI, 'airplayPairingStart').hidden), false,
+    'AirPlay 2 credentials must not incorrectly unlock a legacy Apple TV');
+  assert.strictEqual(sectionIn(renderedUI, 'airplayRouting').hidden, true,
+    'legacy Apple TV playback must remain unavailable until a RAOP secret is saved');
+  assert(/Older Apple TVs can take several seconds/.test(
+    uiWrites[sectionPath('airplayPairingStart') + '.description']),
+  'the legacy Apple TV pairing workflow must explain its longer startup');
+
+  uiValues.airPlayRaopCredentials = JSON.stringify({
+    'AA:BB:CC:DD:EE:01': 'cd'.repeat(32)
+  });
+  renderedUI = await plugin.getUIConfig({ preserveSettingsView: true });
+  assert.strictEqual(Boolean(sectionIn(renderedUI, 'airplayRouting').hidden), false,
+    'a saved legacy RAOP secret must unlock manual Apple TV playback');
+  assert(/saved legacy AirPlay pairing credentials/.test(
+    uiWrites[sectionPath('airplayPairingStart') + '.description']));
+
+  uiValues.preferredAirPlayModel = '';
+  uiValues.airPlayAuthCredentials = '{}';
+  uiValues.airPlayRaopCredentials = '{}';
+  delete plugin.airplayReceivers[0].model;
 
   uiWrites = {};
   uiOptionWrites = {};
   uiValues.outputEnabled = true;
   uiValues.activeBackend = 'airplay';
-  await plugin.getUIConfig();
-  assert(/Living Room over AirPlay.*20%/.test(uiWrites['sections[0].description']),
-    'active AirPlay routing must identify its receiver and starting volume');
-  assert(/no automatic fallback/i.test(uiWrites['sections[0].description']),
+  uiValues.settingsView = 'bluetooth';
+  renderedUI = await plugin.getUIConfig();
+  assert.strictEqual(uiWrites[controlPath('currentOutput', 'currentOutputStatus') + '.label'],
+    'Output: AirPlay — Living Room');
+  assert.strictEqual(uiWrites[controlPath('currentOutput', 'selectedAirPlayStatus') + '.label'],
+    'AirPlay: Living Room');
+  assert(/AirPlay starts at a receiver volume of 20%/.test(uiWrites[currentOutputPath + '.description']),
+    'active AirPlay routing must identify its starting volume');
+  assert(/use AirPlay Receiver Volume.*buffered audio.*delayed by several seconds/i.test(
+    uiWrites[currentOutputPath + '.description']),
+  'active AirPlay routing must distinguish live receiver volume from delayed Volumio software volume');
+  assert(/no automatic fallback/i.test(uiWrites[currentOutputPath + '.description']),
     'active AirPlay routing must explain that fallback is manual');
-  assert.strictEqual(uiWrites['sections[0].content[2].hidden'], false,
+  assert.strictEqual(uiWrites[controlPath('currentOutput', 'removeOutput') + '.hidden'], false,
     'return-to-default recovery must show while AirPlay is active');
+  assert.strictEqual(sectionIn(renderedUI, 'airplayRouting').hidden, true,
+    'AirPlay routing action must hide while wireless routing is already active');
+  assert.strictEqual(Boolean(sectionIn(renderedUI, 'airplayReceivers').hidden), false,
+    'an active AirPlay route must keep the AirPlay controls open regardless of the previously saved view');
+  assert.strictEqual(sectionIn(renderedUI, 'bluetoothDevices').hidden, true,
+    'an active AirPlay route must hide inactive Bluetooth controls');
 
   uiWrites = {};
   uiValues.outputEnabled = false;
   uiValues.activeBackend = '';
+  uiValues.settingsView = 'bluetooth';
   plugin.codecManager.getStatus = async function () {
     return { available: true, deviceConnected: false, systemCodecs: ['SBC'], availableCodecs: [], activeCodec: '' };
   };
-  await plugin.getUIConfig();
-  assert(/audio stream is still preparing/i.test(uiWrites['sections[1].description']),
+  renderedUI = await plugin.getUIConfig({ preserveSettingsView: true });
+  assert(/audio stream is still preparing/i.test(uiWrites[bluetoothDevicesPath + '.description']),
     'a base Bluetooth link without an A2DP PCM must be shown as preparing audio');
-  assert.strictEqual(uiWrites['sections[0].content[0].hidden'], true,
+  assert.strictEqual(sectionIn(renderedUI, 'bluetoothRouting').hidden, true,
     'Play through Bluetooth must remain hidden until the selected A2DP stream is ready');
-  assert.strictEqual(uiWrites['sections[4].content[0].hidden'], false,
+  assert.strictEqual(uiWrites[controlPath('deviceManagement', 'connectDevice') + '.hidden'], false,
     'Reconnect must remain available when BlueZ is connected but A2DP audio is not ready');
 
   uiWrites = {};
@@ -1155,27 +1476,87 @@ async function main() {
   uiValues.preferredDeviceName = '';
   plugin.bluetooth.getStatus = async function () { return { preferred: null }; };
   plugin.devices = [];
-  await plugin.getUIConfig();
-  assert(/Music output: the default device/.test(uiWrites['sections[0].description']),
-    'default-output recovery status must remain visible without a saved device');
-  assert.strictEqual(uiWrites['sections[2].content[0].hidden'], true,
+  await plugin.getUIConfig({ preserveSettingsView: true });
+  assert.strictEqual(uiWrites[controlPath('currentOutput', 'currentOutputStatus') + '.label'],
+    'Output: Default');
+  assert.strictEqual(uiWrites[controlPath('currentOutput', 'selectedBluetoothStatus') + '.label'],
+    'Bluetooth: None selected');
+  assert.strictEqual(uiWrites[controlPath('bluetoothSound', 'preferredCodec') + '.hidden'], true,
     'device codec control must hide until a Bluetooth device is selected');
-  assert(uiOptionWrites['sections[1].content[1].options'].some(function (option) {
+  assert(uiOptionWrites[controlPath('bluetoothDevices', 'preferredDevice') + '.options'].some(function (option) {
     return option.value === '' && option.label === 'Choose a Bluetooth audio device';
   }), 'clean-install device selector must retain an option matching its empty current value');
 
   uiWrites = {};
   uiOptionWrites = {};
   plugin.devices = [{ id: 'AA:BB:CC:DD:EE:02', name: 'Kitchen', paired: true, connected: false, audioCapable: true }];
-  await plugin.getUIConfig();
-  assert(uiOptionWrites['sections[1].content[1].options'].some(function (option) {
+  await plugin.getUIConfig({ preserveSettingsView: true });
+  assert(uiOptionWrites[controlPath('bluetoothDevices', 'preferredDevice') + '.options'].some(function (option) {
     return option.value === '';
   }), 'unsaved selector must retain its placeholder when paired devices are listed');
-  assert(uiOptionWrites['sections[1].content[1].options'].some(function (option) {
+  assert(uiOptionWrites[controlPath('bluetoothDevices', 'preferredDevice') + '.options'].some(function (option) {
     return option.value === 'AA:BB:CC:DD:EE:02';
   }), 'paired audio devices must remain available beside the placeholder');
-  assert.strictEqual(uiWrites['sections[4].content[2].hidden'], false, 'paired audio selector must show for disconnected paired devices');
-  assert.strictEqual(uiWrites['sections[4].content[3].hidden'], true, 'plugin-only reset must hide when no device is selected');
+  assert.strictEqual(uiWrites[controlPath('deviceManagement', 'pairedDeviceToForget') + '.hidden'], false, 'paired audio selector must show for disconnected paired devices');
+  assert.strictEqual(uiWrites[controlPath('deviceManagement', 'resetSpeakerSetup') + '.hidden'], true, 'plugin-only reset must hide when no device is selected');
+
+  var routingBeforeViewChange = {
+    outputEnabled: uiValues.outputEnabled,
+    activeBackend: uiValues.activeBackend,
+    preferredDeviceMac: uiValues.preferredDeviceMac,
+    preferredAirPlayId: uiValues.preferredAirPlayId
+  };
+  pushedUIConfigs = [];
+  await plugin.showAirPlaySettings();
+  assert.strictEqual(uiValues.settingsView, 'airplay');
+  assert.strictEqual(sectionIn(pushedUIConfigs[0], 'airplayReceivers').hidden, false,
+    'AirPlay view selection must immediately push visible AirPlay settings');
+  assert.strictEqual(sectionIn(pushedUIConfigs[0], 'outputSettings').content.find(function (control) {
+    return control.id === 'showAirPlaySettings';
+  }).hidden, true, 'cached AirPlay view must hide its active-view button');
+  await plugin.showBluetoothSettings();
+  assert.strictEqual(uiValues.settingsView, 'bluetooth');
+  assert.strictEqual(pushedUIConfigs.length, 2, 'each view button must push one cached settings update');
+  assert.strictEqual(sectionIn(pushedUIConfigs[1], 'bluetoothDevices').hidden, false,
+    'Bluetooth view selection must immediately push visible Bluetooth settings');
+  assert.strictEqual(sectionIn(pushedUIConfigs[1], 'outputSettings').content.find(function (control) {
+    return control.id === 'showBluetoothSettings';
+  }).hidden, true, 'cached Bluetooth view must hide its active-view button');
+  assert.deepStrictEqual({
+    outputEnabled: uiValues.outputEnabled,
+    activeBackend: uiValues.activeBackend,
+    preferredDeviceMac: uiValues.preferredDeviceMac,
+    preferredAirPlayId: uiValues.preferredAirPlayId
+  }, routingBeforeViewChange, 'changing settings view must not alter routing or saved output choices');
+
+  var defaultViewState = {
+    outputEnabled: true,
+    activeBackend: 'airplay',
+    settingsView: 'airplay'
+  };
+  var defaultViewPlugin = new WirelessOutputManager({ coreCommand: {}, logger: {}, configManager: {} });
+  defaultViewPlugin.log = { info: function () {}, warn: function () {}, error: function () {} };
+  defaultViewPlugin.btLog = defaultViewPlugin.log;
+  defaultViewPlugin.commandRouter = { pushToastMessage: function () {} };
+  defaultViewPlugin.config = {
+    get: function (key) { return defaultViewState[key]; },
+    set: function (key, value) { defaultViewState[key] = value; }
+  };
+  defaultViewPlugin.outputManager = {
+    getStatus: async function () { return { configured: true, backend: 'airplay' }; },
+    removeOutput: async function () { return { removed: true }; }
+  };
+  defaultViewPlugin.airplayBridge = { stop: async function () {} };
+  defaultViewPlugin.airplayPlayback = { reset: function () {} };
+  defaultViewPlugin._stopPlaybackForRouting = async function () {};
+  defaultViewPlugin._withRoutingLock = async function (operation) { return operation(); };
+  defaultViewPlugin._withPreservedSoftwareVolume = async function (operation) { return operation(); };
+  defaultViewPlugin.refreshUI = async function () {};
+  await defaultViewPlugin.removeBluetoothOutput();
+  assert.strictEqual(defaultViewState.outputEnabled, false);
+  assert.strictEqual(defaultViewState.activeBackend, '');
+  assert.strictEqual(defaultViewState.settingsView, 'overview',
+    'returning to the default output must restore the neutral output chooser');
   console.log('All tests passed');
 }
 

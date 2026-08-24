@@ -15,7 +15,7 @@
   "repository": "https://github.com/jhscann/volumio-plugins-sources-bookworm",
   "volumio_info": {
     "prettyName": "Wireless Output Manager",
-    "icon": "fa-bluetooth-b",
+    "icon": "fa-share-alt",
     "plugin_type": "system_hardware",
     "architectures": ["amd64", "armhf"],
     "os": ["bookworm"],

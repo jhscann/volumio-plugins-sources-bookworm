@@ -7,6 +7,7 @@ var os = require('os');
 var path = require('path');
 var AirPlayAdapter = require('../lib/adapters/airplay');
 var AirPlayLiveBridge = require('../lib/airplayLiveBridge');
+var AirPlayPairingManager = require('../lib/airplayPairingManager');
 var AirPlayPlaybackController = require('../lib/airplayPlaybackController');
 var AirPlayPrototype = require('../lib/airplayPrototype').AirPlayPrototype;
 var generateTone = require('../lib/airplayPrototype').generateTone;
@@ -53,6 +54,8 @@ async function main() {
   assert.strictEqual(receivers.length, 1, 'AirPlay and RAOP records for one device must merge');
   assert.deepStrictEqual(receivers[0].protocols, ['airplay2', 'raop']);
   assert.strictEqual(receivers[0].name, 'Living Room');
+  assert.strictEqual(receivers[0].model, 'Speaker1,1',
+    'receiver model must be retained so Apple TV pairing can be identified');
   assert.deepStrictEqual(receivers[0].addresses, ['192.168.1.50']);
 
   var alternateRecord = Object.assign({}, records[0], { address: '192.168.1.51' });
@@ -69,6 +72,140 @@ async function main() {
   assert.strictEqual(args[args.indexOf('--if') + 1], '192.168.1.10',
     'the sender must bind the interface that routes to the receiver');
   assert.strictEqual(args[args.length - 1], '192.168.1.50');
+  var credentials = 'ab'.repeat(96);
+  var authenticatedArgs = adapter.buildSenderArgs(
+    receivers[0], '/tmp/wom-airplay-test', 5, '192.168.1.10', { auth: credentials });
+  assert.strictEqual(authenticatedArgs[authenticatedArgs.indexOf('--auth') + 1], credentials,
+    'saved Apple TV credentials must be supplied to the sender');
+  assert.throws(function () {
+    adapter.buildSenderArgs(receivers[0], '/tmp/wom-airplay-test', 5, '', { auth: 'invalid' });
+  }, /credentials are invalid/);
+  var legacySecret = 'cd'.repeat(32);
+  var legacyArgs = adapter.buildSenderArgs(
+    receivers[0], '/tmp/wom-airplay-test', 5, '192.168.1.10', { secret: legacySecret });
+  assert.strictEqual(legacyArgs[legacyArgs.indexOf('--secret') + 1], legacySecret,
+    'legacy Apple TV pairing secrets must be supplied separately from AirPlay 2 credentials');
+  assert.throws(function () {
+    adapter.buildSenderArgs(receivers[0], '/tmp/wom-airplay-test', 5, '', { secret: 'invalid' });
+  }, /legacy Apple TV pairing secret is invalid/);
+
+  var readinessAttempts = 0;
+  var readinessAdapter = new AirPlayAdapter({
+    runner: runner,
+    probeInfo: async function () {
+      readinessAttempts += 1;
+      return readinessAttempts === 2;
+    },
+    delay: async function () {}
+  });
+  var readiness = await readinessAdapter.prepareReceiver(receivers[0], {
+    attempts: 3, timeoutMs: 1, retryDelayMs: 1, settleDelayMs: 0
+  });
+  assert.deepStrictEqual(readiness, { ready: true, attempts: 2 },
+    'a sleeping AirPlay receiver must be probed again before routing changes');
+  var unavailableAdapter = new AirPlayAdapter({
+    runner: runner,
+    probeInfo: async function () { return false; },
+    delay: async function () {}
+  });
+  await assert.rejects(unavailableAdapter.prepareReceiver(receivers[0], {
+    attempts: 3, timeoutMs: 1, retryDelayMs: 1, settleDelayMs: 0
+  }), /did not make its AirPlay service ready after 3 attempts/,
+  'an unavailable receiver must fail after bounded readiness attempts');
+
+  var pairingArgs;
+  var pairingChild = new EventEmitter();
+  pairingChild.stdout = new EventEmitter();
+  pairingChild.stderr = new EventEmitter();
+  pairingChild.killed = false;
+  pairingChild.stdin = {
+    destroyed: false,
+    write: function (pin) {
+      assert.strictEqual(pin, '1234\n');
+      setImmediate(function () {
+        pairingChild.stdout.emit('data', Buffer.from('CREDENTIALS: ' + credentials + '\n'));
+        pairingChild.emit('close', 0, null);
+      });
+      return true;
+    }
+  };
+  pairingChild.kill = function () {
+    pairingChild.killed = true;
+    pairingChild.emit('close', null, 'SIGTERM');
+  };
+  var pairing = new AirPlayPairingManager({
+    adapter: { checkSender: async function () { return { binary: '/test/cliairplay' }; } },
+    spawn: function (binary, childArgs) {
+      assert.strictEqual(binary, '/test/cliairplay');
+      pairingArgs = childArgs;
+      return pairingChild;
+    },
+    startSettleMs: 1,
+    sessionTimeoutMs: 5000
+  });
+  var appleTv = Object.assign({}, receivers[0], { model: 'AppleTV5,3' });
+  await pairing.start(appleTv);
+  assert.deepStrictEqual(pairingArgs.slice(0, 5), [
+    '--pair-setup', '--port', '7000', '--dacp', AirPlayPairingManager.DACP_ID
+  ], 'Apple TV pairing must use HAP pair-setup and the persistent streaming DACP identity');
+  await assert.rejects(pairing.finish(appleTv.id, '12'), /four-digit PIN/);
+  assert.deepStrictEqual(await pairing.finish(appleTv.id, '1234'), {
+    mode: 'hap', credentials: credentials
+  },
+    'valid pair-setup credentials must be returned without being logged');
+  assert.strictEqual(pairing.getStatus().active, false);
+  assert.match(pairing._friendlyFailure('Device error in M4: 02').message, /rejected that PIN/,
+    'Apple TV wrong-PIN responses must be translated into a useful instruction');
+  assert.match(pairing._friendlyFailure('HAP-ERROR: 05').message, /temporarily limiting/,
+    'Apple TV pairing backoff responses must be translated into a bounded retry instruction');
+
+  var legacyWrites = [];
+  var legacyPairingChild = new EventEmitter();
+  legacyPairingChild.stdout = new EventEmitter();
+  legacyPairingChild.stderr = new EventEmitter();
+  legacyPairingChild.killed = false;
+  legacyPairingChild.stdin = {
+    destroyed: false,
+    write: function (value) {
+      legacyWrites.push(value);
+      if (legacyWrites.length === 2) {
+        setImmediate(function () {
+          legacyPairingChild.stdout.emit('data', Buffer.from(
+            'step1 ... verifying pin\nstep2 ... verifying M1\nsuccess!\nsecret is ' + legacySecret + '\n'));
+          legacyPairingChild.stderr.emit('data', Buffer.from(
+            'Pairing successful!\nUDN: AABBCCDDEEFF@Living Room\nSecret: ' + legacySecret + '\n'));
+          legacyPairingChild.emit('close', 0, null);
+        });
+      }
+      return true;
+    }
+  };
+  legacyPairingChild.kill = function () {
+    legacyPairingChild.killed = true;
+    legacyPairingChild.emit('close', null, 'SIGTERM');
+  };
+  var legacyPairingArgs;
+  var legacyPairing = new AirPlayPairingManager({
+    adapter: { checkSender: async function () { return { binary: '/test/cliairplay' }; } },
+    spawn: function (binary, childArgs) {
+      assert.strictEqual(binary, '/test/cliairplay');
+      legacyPairingArgs = childArgs;
+      return legacyPairingChild;
+    },
+    legacyStartSettleMs: 1,
+    sessionTimeoutMs: 5000
+  });
+  var legacyAppleTv = Object.assign({}, receivers[0], { model: 'AppleTV3,2' });
+  var legacyStarted = await legacyPairing.start(legacyAppleTv, { mode: 'legacy' });
+  assert.deepStrictEqual(legacyPairingArgs, ['--pair'],
+    'an older Apple TV must use the sender legacy RAOP pairing mode');
+  assert.strictEqual(legacyStarted.mode, 'legacy');
+  assert.deepStrictEqual(legacyWrites, ['192.168.1.50\n'],
+    'legacy pairing must target the selected receiver address before requesting its PIN');
+  assert.deepStrictEqual(await legacyPairing.finish(legacyAppleTv.id, '1234'), {
+    mode: 'legacy', credentials: legacySecret
+  }, 'legacy pairing must return only the bounded RAOP secret');
+  assert.deepStrictEqual(legacyWrites, ['192.168.1.50\n', '1234\n']);
 
   var instance = 'Living Room._airplay._tcp.local';
   var target = 'living.local';
@@ -281,8 +418,11 @@ async function main() {
   await transition;
   await transitionBridge.pause();
   await transitionBridge.resume();
-  assert.deepStrictEqual(commandWrites.slice(-2), ['ACTION=PAUSE\n', 'ACTION=PLAY\n'],
+  await transitionBridge.setVolume(12);
+  assert.deepStrictEqual(commandWrites.slice(-3), ['ACTION=PAUSE\n', 'ACTION=PLAY\n', 'VOLUME=12\n'],
     'pause and resume must use transport commands without putting the sender into standby');
+  assert.throws(function () { transitionBridge.setVolume(101); }, /between 0 and 15%/,
+    'live AirPlay volume must remain bounded');
   var now = 1000;
   var stateActions = [];
   var playbackController = new AirPlayPlaybackController({

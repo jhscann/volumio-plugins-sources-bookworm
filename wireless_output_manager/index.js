@@ -5,6 +5,7 @@ var fs = require('fs-extra');
 var path = require('path');
 var AirPlayAdapter = require('./lib/adapters/airplay');
 var AirPlayLiveBridge = require('./lib/airplayLiveBridge');
+var AirPlayPairingManager = require('./lib/airplayPairingManager');
 var AirPlayPlaybackController = require('./lib/airplayPlaybackController');
 var CommandRunner = require('./lib/commandRunner').CommandRunner;
 var BluetoothAdapter = require('./lib/adapters/bluetooth');
@@ -37,6 +38,8 @@ function WirelessOutputManager(context) {
   this.volumeRestoreRetryMs = 500;
   this.lastError = '';
   this.lastDiagnostics = null;
+  this.lastUIConfig = null;
+  this.settingsViewAvailability = null;
   this.devices = [];
   this.airplayReceivers = [];
   this.airPlayStateCallbackRegistered = false;
@@ -58,6 +61,10 @@ WirelessOutputManager.prototype.onVolumioStart = function () {
     logger: this.log,
     maximumVolume: 100,
     onUnexpectedExit: this._handleUnexpectedAirPlayExit.bind(this)
+  });
+  this.airplayPairing = new AirPlayPairingManager({
+    adapter: this.airplay,
+    logger: this.log
   });
   this.airplayPlayback = new AirPlayPlaybackController({
     bridge: this.airplayBridge,
@@ -102,6 +109,7 @@ WirelessOutputManager.prototype.onStart = function () {
       return self.outputManager.removeOutput().then(function () {
         self.config.set('outputEnabled', false);
         self.config.set('activeBackend', '');
+        self.config.set('settingsView', 'overview');
         self.log.warn('Removed a stale AirPlay route during startup; select it manually when ready');
       });
     }
@@ -113,6 +121,7 @@ WirelessOutputManager.prototype.onStop = function () {
   var self = this;
   self.log.info('Stopping');
   self._clearReconnect();
+  if (self.airplayPairing) self.airplayPairing.cancel().catch(function () {});
   if (self.airplayPlayback) self.airplayPlayback.reset();
   if (!self.airplayBridge || (self.config.get('activeBackend') !== 'airplay' &&
     !self.airplayBridge.getStatus().running)) return libQ.resolve();
@@ -126,6 +135,7 @@ WirelessOutputManager.prototype.onStop = function () {
     });
     self.config.set('outputEnabled', false);
     self.config.set('activeBackend', '');
+    self.config.set('settingsView', 'overview');
   }));
 };
 
@@ -460,6 +470,7 @@ WirelessOutputManager.prototype._handleUnexpectedAirPlayExit = async function (o
     await self.airplayBridge.stop().catch(function () {});
     self.config.set('outputEnabled', false);
     self.config.set('activeBackend', '');
+    self.config.set('settingsView', 'overview');
     await self.refreshUI().catch(function () {});
     self._toast('warning', 'The AirPlay session ended, so playback was stopped and the default audio output was restored.');
   });
@@ -471,7 +482,7 @@ WirelessOutputManager.prototype._toast = function (level, message) {
 
 WirelessOutputManager.prototype.refreshUI = function () {
   var self = this;
-  return Promise.resolve(self.getUIConfig()).then(function (uiConfig) {
+  return Promise.resolve(self.getUIConfig({ preserveSettingsView: true })).then(function (uiConfig) {
     self.commandRouter.broadcastMessage('pushUiConfig', uiConfig);
     return uiConfig;
   }).catch(function (error) {
@@ -480,16 +491,84 @@ WirelessOutputManager.prototype.refreshUI = function () {
   });
 };
 
+WirelessOutputManager.prototype._applySettingsViewVisibility = function (uiConfig, view) {
+  var selectedView = ['bluetooth', 'airplay'].indexOf(view) !== -1 ? view : 'overview';
+  var overviewView = selectedView === 'overview';
+  var bluetoothView = selectedView === 'bluetooth';
+  var airplayView = selectedView === 'airplay';
+  var availability = this.settingsViewAvailability || {};
+  var sections = uiConfig && Array.isArray(uiConfig.sections) ? uiConfig.sections : [];
+  function section(sectionId) {
+    return sections.find(function (candidate) { return candidate.id === sectionId; });
+  }
+  var navigation = section('outputSettings');
+  if (navigation) {
+    navigation.description = overviewView
+      ? 'Music is using the default audio output. Choose an output type to view its setup and controls. Opening a view does not change where music plays.'
+      : 'Showing ' + (bluetoothView ? 'Bluetooth' : 'AirPlay') +
+        ' settings. Opening another view changes only what is displayed; it does not change where music plays. Save or apply any changes first.';
+  }
+  var bluetoothDevices = section('bluetoothDevices');
+  var bluetoothRouting = section('bluetoothRouting');
+  var bluetoothSound = section('bluetoothSound');
+  var airplayReceivers = section('airplayReceivers');
+  var airplayRouting = section('airplayRouting');
+  var airplayPairingStart = section('airplayPairingStart');
+  var airplayPairingFinish = section('airplayPairingFinish');
+  var deviceManagement = section('deviceManagement');
+  var behaviour = section('behaviour');
+  var showBluetoothSettings = navigation && navigation.content.find(function (control) {
+    return control.id === 'showBluetoothSettings';
+  });
+  var showAirPlaySettings = navigation && navigation.content.find(function (control) {
+    return control.id === 'showAirPlaySettings';
+  });
+  if (showBluetoothSettings) showBluetoothSettings.hidden = bluetoothView;
+  if (showAirPlaySettings) showAirPlaySettings.hidden = airplayView;
+  if (bluetoothDevices) bluetoothDevices.hidden = !bluetoothView;
+  if (bluetoothRouting) bluetoothRouting.hidden = !bluetoothView || Boolean(availability.bluetoothRoutingHidden);
+  if (bluetoothSound) bluetoothSound.hidden = !bluetoothView || Boolean(availability.bluetoothSoundHidden);
+  if (airplayReceivers) airplayReceivers.hidden = !airplayView;
+  if (airplayRouting) airplayRouting.hidden = !airplayView || Boolean(availability.airplayRoutingHidden);
+  if (airplayPairingStart) airplayPairingStart.hidden = !airplayView || Boolean(availability.airplayPairingStartHidden);
+  if (airplayPairingFinish) airplayPairingFinish.hidden = !airplayView || Boolean(availability.airplayPairingFinishHidden);
+  if (deviceManagement) deviceManagement.hidden = !bluetoothView || Boolean(availability.deviceManagementHidden);
+  if (behaviour) behaviour.hidden = !bluetoothView;
+  return uiConfig;
+};
+
+WirelessOutputManager.prototype._showSettingsView = function (view) {
+  var self = this;
+  var selectedView = ['bluetooth', 'airplay'].indexOf(view) !== -1 ? view : 'overview';
+  self.config.set('settingsView', selectedView);
+  if (!self.lastUIConfig) return self.refreshUI();
+  var uiConfig = JSON.parse(JSON.stringify(self.lastUIConfig));
+  self._applySettingsViewVisibility(uiConfig, selectedView);
+  self.lastUIConfig = uiConfig;
+  return Promise.resolve(self.commandRouter.broadcastMessage('pushUiConfig', uiConfig)).then(function () {
+    return uiConfig;
+  });
+};
+
+WirelessOutputManager.prototype.showBluetoothSettings = function () {
+  return this._showSettingsView('bluetooth');
+};
+
+WirelessOutputManager.prototype.showAirPlaySettings = function () {
+  return this._showSettingsView('airplay');
+};
+
 WirelessOutputManager.prototype._action = function (name, operation, successMessage) {
   var self = this;
-  self.btLog.info(name);
+  var actionLog = /AirPlay|Apple TV/i.test(name) ? self.log : self.btLog;
+  actionLog.info(name);
   return Promise.resolve().then(operation).then(function (result) {
     self.lastError = '';
     if (successMessage) self._toast('success', successMessage);
     return result;
   }).catch(function (error) {
     self.lastError = error.message;
-    self.btLog.error(name + ' failed: ' + error.message);
+    actionLog.error(name + ' failed: ' + error.message);
     var message = error.userMessage || (/\b(?:busctl|bluetoothctl)\b|br-connection-/i.test(error.message)
       ? 'Bluetooth did not finish the requested operation. Keep the device nearby and turned on. If it is already paired, press its Bluetooth button until the pairing light flashes, then try again.'
       : error.message);
@@ -572,16 +651,126 @@ WirelessOutputManager.prototype._airPlayVolume = function () {
   return Number.isFinite(volume) && volume >= 0 && volume <= 100 ? Math.round(volume) : 15;
 };
 
-WirelessOutputManager.prototype.getUIConfig = function () {
+WirelessOutputManager.prototype._airPlayCredentials = function () {
+  try {
+    var parsed = JSON.parse(this.config.get('airPlayAuthCredentials') || '{}');
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch (error) {
+    this.log.warn('Ignoring invalid saved AirPlay credentials map');
+    return {};
+  }
+};
+
+WirelessOutputManager.prototype._airPlayCredentialFor = function (receiverId) {
+  var credentials = String(this._airPlayCredentials()[String(receiverId || '')] || '');
+  return /^[0-9a-f]{192}$/i.test(credentials) ? credentials : '';
+};
+
+WirelessOutputManager.prototype._setAirPlayCredentialFor = function (receiverId, credentials) {
+  if (!receiverId || !/^[0-9a-f]{192}$/i.test(credentials)) {
+    throw new Error('AirPlay pairing did not produce valid credentials');
+  }
+  var saved = this._airPlayCredentials();
+  saved[String(receiverId)] = String(credentials).toLowerCase();
+  this.config.set('airPlayAuthCredentials', JSON.stringify(saved));
+};
+
+WirelessOutputManager.prototype._airPlayRaopCredentials = function () {
+  try {
+    var parsed = JSON.parse(this.config.get('airPlayRaopCredentials') || '{}');
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch (error) {
+    this.log.warn('Ignoring invalid saved legacy Apple TV credentials map');
+    return {};
+  }
+};
+
+WirelessOutputManager.prototype._airPlayRaopCredentialFor = function (receiverId) {
+  var secret = String(this._airPlayRaopCredentials()[String(receiverId || '')] || '');
+  return /^[0-9a-f]{1,64}$/i.test(secret) ? secret : '';
+};
+
+WirelessOutputManager.prototype._setAirPlayRaopCredentialFor = function (receiverId, secret) {
+  if (!receiverId || !/^[0-9a-f]{1,64}$/i.test(secret)) {
+    throw new Error('Legacy Apple TV pairing did not produce a valid secret');
+  }
+  var saved = this._airPlayRaopCredentials();
+  saved[String(receiverId)] = String(secret).toLowerCase();
+  this.config.set('airPlayRaopCredentials', JSON.stringify(saved));
+};
+
+WirelessOutputManager.prototype._isAppleTv = function (receiver) {
+  return Boolean(receiver && /^AppleTV/i.test(String(receiver.model || '')));
+};
+
+WirelessOutputManager.prototype._isLegacyAppleTv = function (receiver) {
+  return Boolean(receiver && /^AppleTV[123],/i.test(String(receiver.model || '')));
+};
+
+WirelessOutputManager.prototype._isHomePod = function (receiver) {
+  return Boolean(receiver && /^AudioAccessory/i.test(String(receiver.model || '')));
+};
+
+WirelessOutputManager.prototype._airPlayPairingDiagnostic = function (receiverId, model) {
+  receiverId = String(receiverId || '');
+  var receiver = { model: String(model || '') };
+  if (!receiverId) {
+    return {
+      selectedPairingType: 'none',
+      selectedReceiverRequiresPairing: false,
+      selectedReceiverPaired: null
+    };
+  }
+  if (!this._isAppleTv(receiver)) {
+    return {
+      selectedPairingType: 'not-required',
+      selectedReceiverRequiresPairing: false,
+      selectedReceiverPaired: null
+    };
+  }
+  var legacy = this._isLegacyAppleTv(receiver);
+  return {
+    selectedPairingType: legacy ? 'legacy-raop-pin' : 'airplay2-hap-pin',
+    selectedReceiverRequiresPairing: true,
+    selectedReceiverPaired: Boolean(legacy
+      ? this._airPlayRaopCredentialFor(receiverId)
+      : this._airPlayCredentialFor(receiverId))
+  };
+};
+
+WirelessOutputManager.prototype.getUIConfig = function (uiOptions) {
   var self = this;
+  uiOptions = uiOptions || {};
   var lang = self.commandRouter.sharedVars.get('language_code');
   return self.commandRouter.i18nJson(
     path.join(__dirname, 'i18n', 'strings_' + lang + '.json'),
     path.join(__dirname, 'i18n', 'strings_en.json'), path.join(__dirname, 'UIConfig.json')
   ).then(async function (ui) {
-    function set(index, key, value) { self.configManager.setUIConfigParam(ui, index + '.' + key, value); }
-    set('sections[5].content[0]', 'value', Boolean(self.config.get('autoReconnect')));
-    set('sections[6].content[0]', 'value', Boolean(self.config.get('debugLogging')));
+    function sectionPath(sectionId) {
+      var sectionIndex = ui.sections.findIndex(function (section) { return section.id === sectionId; });
+      if (sectionIndex === -1) throw new Error('UI section not found: ' + sectionId);
+      return 'sections[' + sectionIndex + ']';
+    }
+    function controlPath(sectionId, controlId) {
+      var sectionIndex = ui.sections.findIndex(function (section) { return section.id === sectionId; });
+      if (sectionIndex === -1) throw new Error('UI section not found: ' + sectionId);
+      var controlIndex = ui.sections[sectionIndex].content.findIndex(function (control) { return control.id === controlId; });
+      if (controlIndex === -1) throw new Error('UI control not found: ' + sectionId + '.' + controlId);
+      return 'sections[' + sectionIndex + '].content[' + controlIndex + ']';
+    }
+    function setSection(sectionId, key, value) {
+      self.configManager.setUIConfigParam(ui, sectionPath(sectionId) + '.' + key, value);
+    }
+    function setControl(sectionId, controlId, key, value) {
+      self.configManager.setUIConfigParam(ui, controlPath(sectionId, controlId) + '.' + key, value);
+    }
+    function pushOption(sectionId, controlId, value) {
+      self.configManager.pushUIConfigParam(ui, controlPath(sectionId, controlId) + '.options', value);
+    }
+    var settingsView = String(self.config.get('settingsView') || 'overview').toLowerCase();
+    if (['overview', 'bluetooth', 'airplay'].indexOf(settingsView) === -1) settingsView = 'overview';
+    setControl('behaviour', 'autoReconnect', 'value', Boolean(self.config.get('autoReconnect')));
+    setControl('diagnostics', 'debugLogging', 'value', Boolean(self.config.get('debugLogging')));
     var preferred = self.config.get('preferredDeviceMac') || '';
     var preferredCodec = self._preferredCodecFor(preferred);
     var preferredName = self.config.get('preferredDeviceName') || 'No device selected';
@@ -589,7 +778,7 @@ WirelessOutputManager.prototype.getUIConfig = function () {
     var status = await self.bluetooth.getStatus(preferred).catch(function (error) { return { available: false, lastError: error.message }; });
     var options = self._speakerOptions(preferred, status.preferred);
     var selectedOption = options.find(function (device) { return device.id === preferred; });
-    set('sections[1].content[1]', 'value', {
+    setControl('bluetoothDevices', 'preferredDevice', 'value', {
       value: preferred,
       label: selectedOption ? self._speakerOptionLabel(selectedOption, preferred) : preferredName
     });
@@ -597,13 +786,13 @@ WirelessOutputManager.prototype.getUIConfig = function () {
     // option. A clean installation has no saved device, so keep the empty
     // value in the option list until selection and connection succeed.
     if (!preferred) {
-      self.configManager.pushUIConfigParam(ui, 'sections[1].content[1].options', {
+      pushOption('bluetoothDevices', 'preferredDevice', {
         value: '',
         label: 'Choose a Bluetooth audio device'
       });
     }
     options.forEach(function (device) {
-      self.configManager.pushUIConfigParam(ui, 'sections[1].content[1].options', {
+      pushOption('bluetoothDevices', 'preferredDevice', {
         value: device.id,
         label: self._speakerOptionLabel(device, preferred)
       });
@@ -614,6 +803,12 @@ WirelessOutputManager.prototype.getUIConfig = function () {
     var activeBackend = outputEnabled ? String(self.config.get('activeBackend') || 'bluetooth') : '';
     var bluetoothOutputActive = outputEnabled && activeBackend === 'bluetooth';
     var airplayOutputActive = outputEnabled && activeBackend === 'airplay';
+    if (bluetoothOutputActive) settingsView = 'bluetooth';
+    else if (airplayOutputActive) settingsView = 'airplay';
+    else if (uiOptions.preserveSettingsView !== true) {
+      settingsView = 'overview';
+      self.config.set('settingsView', 'overview');
+    }
     var connectedAudio = options.filter(function (device) { return device.audioCapable === true && device.connected; });
     var connectedNames = connectedAudio.map(function (device) { return device.name || device.id; });
     var codecStatus = preferred ? await self.codecManager.getStatus(preferred).catch(function (error) {
@@ -634,29 +829,29 @@ WirelessOutputManager.prototype.getUIConfig = function () {
       }
     });
     var selectedCodecOption = codecOptions.find(function (option) { return option.value === preferredCodec; });
-    set('sections[2].content[0]', 'options', codecOptions);
-    set('sections[2].content[0]', 'value', selectedCodecOption || codecOptions[0]);
-    set('sections[2].content[0]', 'hidden', !preferred);
-    set('sections[2]', 'hidden', !preferred);
+    setControl('bluetoothSound', 'preferredCodec', 'options', codecOptions);
+    setControl('bluetoothSound', 'preferredCodec', 'value', selectedCodecOption || codecOptions[0]);
+    setControl('bluetoothSound', 'preferredCodec', 'hidden', !preferred);
+    setSection('bluetoothSound', 'hidden', !preferred);
 
     if (bluetoothOutputActive && connected) {
-      set('sections[1]', 'description', preferredName +
+      setSection('bluetoothDevices', 'description', preferredName +
         ' is the active Bluetooth output. To use another device, first select Return to default audio output above. Then choose the other device, select Select and connect, and route playback to Bluetooth again.');
     } else if (connected && !audioReady) {
-      set('sections[1]', 'description', preferredName +
+      setSection('bluetoothDevices', 'description', preferredName +
         ' has a Bluetooth connection, but its audio stream is still preparing. Keep it nearby and switched on, then use Reconnect selected device if the Play button does not appear.');
     } else if (connectedAudio.length > 1) {
-      set('sections[1]', 'description', 'Selected: ' + preferredName + '. Also connected: ' +
+      setSection('bluetoothDevices', 'description', 'Selected: ' + preferredName + '. Also connected: ' +
         connectedNames.filter(function (name) { return name !== preferredName; }).join(', ') +
         '. Choose one device and select Select and connect. Other Bluetooth audio devices will disconnect but remain paired. Music output does not change automatically.');
     } else if (audioReady) {
-      set('sections[1]', 'description', preferredName +
+      setSection('bluetoothDevices', 'description', preferredName +
         ' is selected and connected. To change devices, choose another one and select Select and connect. Music output does not change automatically.');
     } else if (paired) {
-      set('sections[1]', 'description', preferredName +
+      setSection('bluetoothDevices', 'description', preferredName +
         ' is selected but disconnected. Switch it on and use Reconnect selected device. If that fails, press its Bluetooth button until the pairing light flashes and retry. You can also choose another device and select Select and connect.');
     } else {
-      set('sections[1]', 'description',
+      setSection('bluetoothDevices', 'description',
         'For a new device: put it in pairing mode, search, choose it, then select Select and connect. Keep its pairing light flashing until audio is ready; some devices may need their Bluetooth button pressed again. A previously paired device normally only needs to be switched on.');
     }
 
@@ -666,59 +861,64 @@ WirelessOutputManager.prototype.getUIConfig = function () {
         return null;
       })
       : null;
-    set('sections[2].content[1]', 'hidden', !bluetoothDeviceVolume);
+    setControl('bluetoothSound', 'bluetoothDeviceVolume', 'hidden', !bluetoothDeviceVolume);
     if (bluetoothDeviceVolume) {
-      set('sections[2].content[1]', 'value', bluetoothDeviceVolume.maximum);
-      set('sections[2].content[1]', 'description',
+      setControl('bluetoothSound', 'bluetoothDeviceVolume', 'value', bluetoothDeviceVolume.maximum);
+      setControl('bluetoothSound', 'bluetoothDeviceVolume', 'description',
         'Current Bluetooth stream volume: ' + bluetoothDeviceVolume.maximum +
         '%. This is local BlueALSA digital gain, not necessarily the device\'s physical volume. A normal switch to Bluetooth starts at 10% for safety; Apply codec and volume uses the level entered here.');
     }
 
+    var selectedAirPlayId = self.config.get('preferredAirPlayId') || '';
+    var selectedAirPlayName = self.config.get('preferredAirPlayName') || selectedAirPlayId;
+    var bluetoothState = audioReady ? 'Audio ready' : (connected ? 'Preparing audio' : 'Disconnected');
+    var currentOutputStatus = 'Default';
+    if (bluetoothOutputActive) {
+      currentOutputStatus = 'Bluetooth — ' + preferredName + (audioReady ? '' : ' (' + bluetoothState + ')');
+    } else if (airplayOutputActive) {
+      currentOutputStatus = 'AirPlay — ' + (selectedAirPlayName || 'selected receiver');
+    }
+    setControl('currentOutput', 'currentOutputStatus', 'label', 'Output: ' + currentOutputStatus);
+    setControl('currentOutput', 'selectedBluetoothStatus', 'label', 'Bluetooth: ' +
+      (preferred ? preferredName + ' · ' + bluetoothState : 'None selected'));
+    setControl('currentOutput', 'selectedAirPlayStatus', 'label', 'AirPlay: ' +
+      (selectedAirPlayName || 'None selected'));
+
     var listeningSafety = 'Listening safety: wireless loudness may be controlled at three points: Volumio volume when its software mixer is enabled, Bluetooth stream volume or AirPlay sender volume, and the receiving device\'s own volume. Keep headphones off your head until routing and volume setup is complete and you have confirmed a safe level. ';
     var outputDescription;
     if (bluetoothOutputActive && audioReady) {
-      outputDescription = 'Music output: ' + preferredName + ' over Bluetooth. Changing output stops playback; press Play afterward. ' +
+      outputDescription = 'Changing output stops playback; press Play afterward. ' +
         'There is no automatic fallback. Volumio may display 100% after Bluetooth playback starts; actual loudness is controlled by Bluetooth stream volume and the device\'s own controls.';
     } else if (bluetoothOutputActive) {
-      outputDescription = 'Music output is still set to ' + preferredName + ', but the device is disconnected. ' +
-        'Reconnect it or return to the default audio output. There is no automatic fallback.';
+      outputDescription = 'Reconnect the selected Bluetooth device or return to the default audio output. There is no automatic fallback.';
     } else if (airplayOutputActive) {
-      outputDescription = 'Music output: ' + (self.config.get('preferredAirPlayName') || 'the selected AirPlay receiver') +
-        ' over AirPlay at a starting receiver volume of ' + self._airPlayVolume() + '%. Changing output stops playback; press Play afterward. ' +
+      outputDescription = 'AirPlay starts at a receiver volume of ' + self._airPlayVolume() + '%. Changing output stops playback; press Play afterward. ' +
+        'For prompt loudness changes, use AirPlay Receiver Volume in AirPlay settings; Volumio main software-volume changes pass through buffered audio and may be delayed by several seconds. ' +
         'Track changes, seeks, pause and resume keep this AirPlay session open. There is no automatic fallback if the receiver or network becomes unavailable.';
-    } else if (preferred) {
-      outputDescription = 'Music output: the default device selected in Volumio Playback Options. Selected Bluetooth device: ' +
-        preferredName + ' — ' + (audioReady ? 'audio ready' : (connected ? 'preparing audio' : 'disconnected')) +
-        '. Changing output stops playback; press Play afterward.';
-    } else if (self.config.get('preferredAirPlayId')) {
-      outputDescription = 'Music output: the default device selected in Volumio Playback Options. Selected AirPlay receiver: ' +
-        (self.config.get('preferredAirPlayName') || self.config.get('preferredAirPlayId')) +
-        '. Changing output stops playback; press Play afterward.';
+    } else if (preferred || selectedAirPlayId) {
+      outputDescription = 'Wireless devices are selected but music remains on the default output until you route it manually. Changing output stops playback; press Play afterward.';
     } else {
-      outputDescription = 'Music output: the default device selected in Volumio Playback Options. ' +
-        'Set up a Bluetooth audio device or AirPlay receiver before choosing a wireless output.';
+      outputDescription = 'Set up a Bluetooth audio device or AirPlay receiver before choosing a wireless output.';
     }
-    set('sections[0]', 'description', listeningSafety + outputDescription);
-    set('sections[0].content[0]', 'hidden', !preferred || !audioReady || outputEnabled);
-    set('sections[0].content[1]', 'hidden', !self.config.get('preferredAirPlayId') || outputEnabled);
-    set('sections[0].content[2]', 'hidden', !outputEnabled);
+    setSection('currentOutput', 'description', listeningSafety + outputDescription);
+    setControl('currentOutput', 'removeOutput', 'hidden', !outputEnabled);
 
     var pairedAudio = options.filter(function (device) { return device.paired && device.audioCapable === true; });
-    set('sections[4]', 'hidden', !preferred && pairedAudio.length === 0);
-    set('sections[4].content[0]', 'hidden', !preferred || audioReady);
-    set('sections[4].content[1]', 'hidden', !connected);
+    setSection('deviceManagement', 'hidden', !preferred && pairedAudio.length === 0);
+    setControl('deviceManagement', 'connectDevice', 'hidden', !preferred || audioReady);
+    setControl('deviceManagement', 'disconnectDevice', 'hidden', !connected);
     pairedAudio.forEach(function (device) {
-      self.configManager.pushUIConfigParam(ui, 'sections[4].content[2].options', {
+      pushOption('deviceManagement', 'pairedDeviceToForget', {
         value: device.id,
         label: self._speakerOptionLabel(device, preferred)
       });
     });
-    set('sections[4].content[2]', 'value', {
+    setControl('deviceManagement', 'pairedDeviceToForget', 'value', {
       value: '',
       label: pairedAudio.length ? 'Select a paired audio device' : 'No paired audio devices'
     });
-    set('sections[4].content[2]', 'hidden', pairedAudio.length === 0);
-    set('sections[4].content[3]', 'hidden', !preferred);
+    setControl('deviceManagement', 'pairedDeviceToForget', 'hidden', pairedAudio.length === 0);
+    setControl('deviceManagement', 'resetSpeakerSetup', 'hidden', !preferred);
 
     var codecDescription;
     var preferredCodecName = self.codecManager.displayName(preferredCodec);
@@ -738,8 +938,8 @@ WirelessOutputManager.prototype.getUIConfig = function () {
         'A normal switch to Bluetooth starts at 10% stream volume for safety.';
       if (codecStatus.systemCodecs.indexOf('AAC') === -1) codecDescription += ' AAC is not available in the installed BlueALSA build.';
     }
-    set('sections[2]', 'description', codecDescription);
-    set('sections[2].content[0]', 'description', preferred
+    setSection('bluetoothSound', 'description', codecDescription);
+    setControl('bluetoothSound', 'preferredCodec', 'description', preferred
       ? 'Saved for ' + preferredName + '. ' + (bluetoothOutputActive
         ? 'Apply codec and volume changes and verifies the codec now; there is no need to change output first.'
         : 'The choice is applied and verified the next time Bluetooth output is selected.')
@@ -748,19 +948,34 @@ WirelessOutputManager.prototype.getUIConfig = function () {
     var savedAirPlayId = String(self.config.get('preferredAirPlayId') || '');
     var savedAirPlayName = String(self.config.get('preferredAirPlayName') || 'No AirPlay receiver selected');
     var selectedAirPlay = self._findAirPlayReceiver(savedAirPlayId);
+    var appleTvSelected = self._isAppleTv(selectedAirPlay || {
+      model: String(self.config.get('preferredAirPlayModel') || '')
+    });
+    var legacyAppleTvSelected = self._isLegacyAppleTv(selectedAirPlay || {
+      model: String(self.config.get('preferredAirPlayModel') || '')
+    });
+    var savedAirPlayCredential = legacyAppleTvSelected
+      ? self._airPlayRaopCredentialFor(savedAirPlayId)
+      : self._airPlayCredentialFor(savedAirPlayId);
+    var homePodSelected = self._isHomePod(selectedAirPlay || {
+      model: String(self.config.get('preferredAirPlayModel') || '')
+    });
+    var pairingStatus = self.airplayPairing ? self.airplayPairing.getStatus() : { active: false };
+    var pairingThisReceiver = pairingStatus.active && pairingStatus.receiverId === savedAirPlayId;
     var airplayOptions = self.airplayReceivers.slice();
     var selectedAirPlayLabel = savedAirPlayName;
     if (savedAirPlayId && !selectedAirPlay) {
       airplayOptions.unshift({
         id: savedAirPlayId,
         name: savedAirPlayName,
+        model: String(self.config.get('preferredAirPlayModel') || ''),
         address: String(self.config.get('preferredAirPlayAddress') || ''),
         addresses: [],
         protocols: []
       });
     }
     if (!savedAirPlayId) {
-      self.configManager.pushUIConfigParam(ui, 'sections[3].content[1].options', {
+      pushOption('airplayReceivers', 'preferredAirPlayReceiver', {
         value: '', label: 'Choose an AirPlay receiver'
       });
     }
@@ -769,29 +984,62 @@ WirelessOutputManager.prototype.getUIConfig = function () {
         ? 'AirPlay 2' : 'AirPlay';
       var optionLabel = receiver.name + ' — ' + protocol +
         (receiver.id === savedAirPlayId ? ', selected' : '');
-      self.configManager.pushUIConfigParam(ui, 'sections[3].content[1].options', {
+      pushOption('airplayReceivers', 'preferredAirPlayReceiver', {
         value: receiver.id,
         label: optionLabel
       });
       if (receiver.id === savedAirPlayId) selectedAirPlayLabel = optionLabel;
     });
-    set('sections[3].content[1]', 'value', {
+    setControl('airplayReceivers', 'preferredAirPlayReceiver', 'value', {
       value: savedAirPlayId,
       label: selectedAirPlayLabel
     });
-    set('sections[3].content[2]', 'value', self._airPlayVolume());
+    setControl('airplayReceivers', 'airPlayReceiverVolume', 'value', self._airPlayVolume());
+    if (pairingThisReceiver) {
+      setSection('airplayPairingFinish', 'description', savedAirPlayName +
+        ' should now show a four-digit PIN. Enter it below within two minutes.' +
+        (pairingStatus.mode === 'legacy' ? ' This older Apple TV uses legacy AirPlay pairing.' : ''));
+    } else if (appleTvSelected && savedAirPlayCredential) {
+      setSection('airplayPairingStart', 'description', savedAirPlayName +
+        ' has saved ' + (legacyAppleTvSelected ? 'legacy AirPlay' : 'AirPlay 2') +
+        ' pairing credentials. Use Pair Apple TV again only if playback is rejected or the Apple TV pairing was reset.');
+    } else if (appleTvSelected) {
+      setSection('airplayPairingStart', 'description', 'Pair ' + savedAirPlayName +
+        ' before playback. The television will display a four-digit PIN for entry here.' +
+        (legacyAppleTvSelected ? ' Older Apple TVs can take several seconds to begin pairing.' : ''));
+    }
     if (airplayOutputActive) {
-      set('sections[3]', 'description', (self.config.get('preferredAirPlayName') || 'The selected receiver') +
+      setSection('airplayReceivers', 'description', (self.config.get('preferredAirPlayName') || 'The selected receiver') +
         ' is the active AirPlay output. Return to the default audio output before selecting another receiver. Playback does not move automatically.');
+    } else if (bluetoothOutputActive && savedAirPlayId) {
+      setSection('airplayReceivers', 'description', 'Selected AirPlay receiver: ' + savedAirPlayName +
+        '. Bluetooth output is currently active. Select Return to default audio output above before routing playback to this AirPlay receiver. ' +
+        'Search again if the receiver has changed address or does not respond.');
+    } else if (appleTvSelected && !savedAirPlayCredential) {
+      setSection('airplayReceivers', 'description', 'Selected Apple TV: ' + savedAirPlayName +
+        '. Pair it below before routing music. Pairing displays a four-digit PIN on the television.');
+    } else if (homePodSelected) {
+      setSection('airplayReceivers', 'description', 'Selected HomePod: ' + savedAirPlayName +
+        '. The plugin checks that it is awake before changing the current output. If it remains unavailable, tap the top of the HomePod, wait a few seconds and try again.');
     } else if (savedAirPlayId) {
-      set('sections[3]', 'description', 'Selected AirPlay receiver: ' + savedAirPlayName +
+      setSection('airplayReceivers', 'description', 'Selected AirPlay receiver: ' + savedAirPlayName +
         '. Search again if it has changed address or does not respond. Music remains on the current output until you select Play through selected AirPlay receiver.');
     }
 
-    set('sections[6].content[4]', 'value', self.lastDiagnostics ? JSON.stringify(self.lastDiagnostics, null, 2) : 'Run diagnostics to collect system state.');
-    set('sections[6].content[5]', 'value', self.lastError || 'None');
-    set('sections[6].content[4]', 'hidden', !self.lastDiagnostics);
-    set('sections[6].content[5]', 'hidden', !self.lastError);
+    setControl('diagnostics', 'diagnosticOutput', 'value', self.lastDiagnostics ? JSON.stringify(self.lastDiagnostics, null, 2) : 'Run diagnostics to collect system state.');
+    setControl('diagnostics', 'lastError', 'value', self.lastError || 'None');
+    setControl('diagnostics', 'diagnosticOutput', 'hidden', !self.lastDiagnostics);
+    setControl('diagnostics', 'lastError', 'hidden', !self.lastError);
+    self.settingsViewAvailability = {
+      bluetoothRoutingHidden: !preferred || !audioReady || outputEnabled,
+      bluetoothSoundHidden: !preferred,
+      airplayRoutingHidden: !savedAirPlayId || outputEnabled || (appleTvSelected && !savedAirPlayCredential),
+      airplayPairingStartHidden: !appleTvSelected || pairingThisReceiver || outputEnabled,
+      airplayPairingFinishHidden: !pairingThisReceiver || outputEnabled,
+      deviceManagementHidden: !preferred && pairedAudio.length === 0
+    };
+    self._applySettingsViewVisibility(ui, settingsView);
+    self.lastUIConfig = ui;
     return ui;
   });
 };
@@ -1042,6 +1290,41 @@ WirelessOutputManager.prototype.discoverAirPlayReceivers = function () {
   }, 'AirPlay search finished');
 };
 
+WirelessOutputManager.prototype.startAirPlayPairing = function () {
+  var self = this;
+  return self._action('Starting Apple TV pairing', async function () {
+    if (self.config.get('outputEnabled')) {
+      throw new Error('Return to the default audio output before pairing an Apple TV');
+    }
+    var receiverId = String(self.config.get('preferredAirPlayId') || '');
+    if (!receiverId) throw new Error('Search for and save an Apple TV first');
+    await self._loadAirPlayReceivers();
+    var receiver = self._findAirPlayReceiver(receiverId);
+    if (!receiver) throw new Error('The selected Apple TV is not currently available. Wake it and search again.');
+    if (!self._isAppleTv(receiver)) {
+      throw new Error('PIN pairing is available only for a discovered Apple TV');
+    }
+    var result = await self.airplayPairing.start(receiver, {
+      mode: self._isLegacyAppleTv(receiver) ? 'legacy' : 'hap'
+    });
+    await self.refreshUI();
+    return result;
+  }, 'A pairing PIN should now be shown on the Apple TV');
+};
+
+WirelessOutputManager.prototype.finishAirPlayPairing = function (data) {
+  var self = this;
+  return self._action('Completing Apple TV pairing', async function () {
+    var receiverId = String(self.config.get('preferredAirPlayId') || '');
+    var pin = self._submittedSelect(data, 'airPlayPairingPin');
+    var result = await self.airplayPairing.finish(receiverId, pin);
+    if (result.mode === 'legacy') self._setAirPlayRaopCredentialFor(receiverId, result.credentials);
+    else self._setAirPlayCredentialFor(receiverId, result.credentials);
+    await self.refreshUI();
+    return { receiverId: receiverId, paired: true, mode: result.mode };
+  }, 'Apple TV paired; playback can now be routed to it');
+};
+
 WirelessOutputManager.prototype._submittedSelect = function (data, field) {
   var selected = data && Object.prototype.hasOwnProperty.call(data, field) ? data[field] : data;
   for (var depth = 0; depth < 5; depth += 1) {
@@ -1065,6 +1348,7 @@ WirelessOutputManager.prototype.saveAirPlayReceiver = function (data) {
         id: savedId,
         name: String(self.config.get('preferredAirPlayName') || savedId),
         address: String(self.config.get('preferredAirPlayAddress') || ''),
+        model: String(self.config.get('preferredAirPlayModel') || ''),
         addresses: []
       };
     }
@@ -1074,13 +1358,24 @@ WirelessOutputManager.prototype.saveAirPlayReceiver = function (data) {
       throw new Error('Return to the default audio output before changing AirPlay receivers');
     }
     var volume = self._submittedNumber(data, 'airPlayReceiverVolume', 'AirPlay receiver volume');
+    if (savedId && savedId !== receiver.id && self.airplayPairing) {
+      await self.airplayPairing.cancel();
+    }
     self.config.set('preferredAirPlayId', receiver.id);
     self.config.set('preferredAirPlayName', receiver.name || receiver.id);
     self.config.set('preferredAirPlayAddress', receiver.address || '');
+    self.config.set('preferredAirPlayModel', receiver.model || '');
     self.config.set('airPlayReceiverVolume', volume);
+    var liveVolumeApplied = Boolean(self.config.get('outputEnabled') &&
+      self.config.get('activeBackend') === 'airplay' && savedId === receiver.id &&
+      self.airplayBridge && self.airplayBridge.getStatus().ready);
+    if (liveVolumeApplied) await self.airplayBridge.setVolume(volume);
     await self.refreshUI();
-    return { receiver: receiver, volume: volume };
-  }, 'AirPlay receiver and starting volume saved');
+    self._toast('success', liveVolumeApplied
+      ? 'AirPlay receiver volume updated'
+      : 'AirPlay receiver and starting volume saved');
+    return { receiver: receiver, volume: volume, liveVolumeApplied: liveVolumeApplied };
+  });
 };
 WirelessOutputManager.prototype._selected = function (data) {
   var selected = data && (data.device || data.preferredDevice || data);
@@ -1177,10 +1472,15 @@ WirelessOutputManager.prototype.resetSpeakerSetup = function () {
     self.config.set('preferredAirPlayId', '');
     self.config.set('preferredAirPlayName', '');
     self.config.set('preferredAirPlayAddress', '');
+    self.config.set('preferredAirPlayModel', '');
+    self.config.set('airPlayAuthCredentials', '{}');
+    self.config.set('airPlayRaopCredentials', '{}');
     self.config.set('airPlayReceiverVolume', 15);
     self.config.set('activeBackend', '');
+    self.config.set('settingsView', 'overview');
     self.devices = [];
     self.airplayReceivers = [];
+    if (self.airplayPairing) await self.airplayPairing.cancel().catch(function () {});
     if (self.airplayBridge) await self.airplayBridge.stop().catch(function () {});
     if (self.airplayPlayback) self.airplayPlayback.reset();
     await self.refreshUI();
@@ -1224,6 +1524,7 @@ WirelessOutputManager.prototype.createBluetoothOutput = function () {
         }).then(function (result) {
           self.config.set('outputEnabled', true);
           self.config.set('activeBackend', 'bluetooth');
+          self.config.set('settingsView', 'bluetooth');
           return result;
         });
       }).then(function (result) {
@@ -1251,6 +1552,30 @@ WirelessOutputManager.prototype.createAirPlayOutput = function () {
       var advertised = receiver.addresses && receiver.addresses.length
         ? receiver.addresses : [receiver.address];
       var selectedAddress = advertised.indexOf(savedAddress) !== -1 ? savedAddress : receiver.address;
+      var legacyAppleTv = self._isLegacyAppleTv(receiver);
+      var credentials = self._airPlayCredentialFor(receiver.id);
+      var legacySecret = self._airPlayRaopCredentialFor(receiver.id);
+      if (self._isAppleTv(receiver) && !(legacyAppleTv ? legacySecret : credentials)) {
+        var pairingRequired = new Error('Apple TV pairing is required');
+        pairingRequired.userMessage = (receiver.name || 'The selected Apple TV') +
+          ' must be paired before playback using ' + (legacyAppleTv ? 'legacy AirPlay' : 'AirPlay 2') +
+          '. Open AirPlay settings and select Pair Apple TV.';
+        throw pairingRequired;
+      }
+      if (self._isHomePod(receiver)) {
+        try {
+          await self.airplay.prepareReceiver(receiver, {
+            attempts: 3,
+            timeoutMs: 4000,
+            retryDelayMs: 1000,
+            settleDelayMs: 750
+          });
+        } catch (readinessError) {
+          readinessError.userMessage = (receiver.name || 'The selected HomePod') +
+            ' is not responding to AirPlay yet. Wake it by tapping the top, wait a few seconds, then try again. The current output was not changed.';
+          throw readinessError;
+        }
+      }
       var volume = self._airPlayVolume();
       return self._withPreservedSoftwareVolume(async function () {
         await self._stopPlaybackForRouting();
@@ -1260,12 +1585,27 @@ WirelessOutputManager.prototype.createAirPlayOutput = function () {
           try {
             ready = await self.airplayBridge.start(receiver, {
               address: selectedAddress,
-              volume: volume
+              volume: volume,
+              auth: legacyAppleTv ? '' : credentials,
+              secret: legacyAppleTv ? legacySecret : ''
             });
           } catch (senderError) {
-            senderError.userMessage = 'Could not start AirPlay to ' +
-              (receiver.name || 'the selected receiver') +
-              '. The receiver may still be becoming available. Wait a few seconds, search again if needed, then try once more.';
+            if (!senderError.userMessage) {
+              var rejected = /RTSP\/1\.0\s+(?:401|403)|request failed, error.*(?:401|403)/i.test(senderError.message);
+              var legacyPairingFailure = legacyAppleTv &&
+                /auth_required|auth_failed|pairing secret|requires authentication|\bsecret\b/i.test(senderError.message);
+              if (legacyPairingFailure) {
+                senderError.userMessage = (receiver.name || 'The selected Apple TV') +
+                  ' rejected its legacy AirPlay pairing. Select Pair Apple TV again and enter the new PIN shown on the television.';
+              } else if (self._isAppleTv(receiver) && rejected) {
+                senderError.userMessage = (receiver.name || 'The selected Apple TV') +
+                  ' rejected its saved pairing. Select Pair Apple TV again, then enter the new PIN shown on the television.';
+              } else {
+                senderError.userMessage = 'Could not start AirPlay to ' +
+                  (receiver.name || 'the selected receiver') +
+                  '. Check that it is awake and available, search again if needed, then try once more.';
+              }
+            }
             throw senderError;
           }
           var result = await self.outputManager.createAirPlayOutput(ready.fifo);
@@ -1278,6 +1618,7 @@ WirelessOutputManager.prototype.createAirPlayOutput = function () {
           self.config.set('preferredAirPlayAddress', ready.address);
           self.config.set('outputEnabled', true);
           self.config.set('activeBackend', 'airplay');
+          self.config.set('settingsView', 'airplay');
           if (self.airplayPlayback) self.airplayPlayback.reset();
           return result;
         } catch (error) {
@@ -1301,6 +1642,7 @@ WirelessOutputManager.prototype.removeBluetoothOutput = function () {
       ? await self.outputManager.getStatus().catch(function () { return null; })
       : null;
     if (!self.config.get('outputEnabled') && outputStatus && !outputStatus.configured) {
+      self.config.set('settingsView', 'overview');
       await self.refreshUI();
       return { alreadyDefault: true };
     }
@@ -1312,6 +1654,7 @@ WirelessOutputManager.prototype.removeBluetoothOutput = function () {
         if (self.airplayPlayback) self.airplayPlayback.reset();
         self.config.set('outputEnabled', false);
         self.config.set('activeBackend', '');
+        self.config.set('settingsView', 'overview');
         return result;
       });
     }).then(function (result) {
@@ -1449,6 +1792,9 @@ WirelessOutputManager.prototype.saveVolumeSettings = function (data) {
 WirelessOutputManager.prototype.runDiagnostics = function () {
   var self = this;
   return self.diagnostics.all().then(async function (result) {
+    var selectedAirPlayId = self.config.get('preferredAirPlayId') || '';
+    var selectedAirPlayModel = self.config.get('preferredAirPlayModel') || '';
+    var pairingDiagnostic = self._airPlayPairingDiagnostic(selectedAirPlayId, selectedAirPlayModel);
     result.wirelessOutput = await self.outputManager.getStatus();
     result.preferredDevice = await self.bluetooth.getStatus(self.config.get('preferredDeviceMac'));
     result.bluetoothCodec = await self.codecManager.getStatus(self.config.get('preferredDeviceMac')).catch(function (error) {
@@ -1459,10 +1805,15 @@ WirelessOutputManager.prototype.runDiagnostics = function () {
       return { available: false, error: error.message };
     });
     result.airplay = {
-      selectedId: self.config.get('preferredAirPlayId') || '',
+      selectedId: selectedAirPlayId,
       selectedName: self.config.get('preferredAirPlayName') || '',
       selectedAddress: self.config.get('preferredAirPlayAddress') || '',
+      selectedModel: selectedAirPlayModel,
       receiverVolume: self._airPlayVolume(),
+      selectedPairingType: pairingDiagnostic.selectedPairingType,
+      selectedReceiverRequiresPairing: pairingDiagnostic.selectedReceiverRequiresPairing,
+      selectedReceiverPaired: pairingDiagnostic.selectedReceiverPaired,
+      pairingActive: Boolean(self.airplayPairing && self.airplayPairing.getStatus().active),
       discoveredReceivers: self.airplayReceivers.map(function (receiver) {
         return {
           id: receiver.id,

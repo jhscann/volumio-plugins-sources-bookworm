@@ -1,10 +1,42 @@
 'use strict';
 
 var fs = require('fs-extra');
+var http = require('http');
 var path = require('path');
 var MdnsDiscovery = require('../mdnsDiscovery').MdnsDiscovery;
 
 var RAOP_FIELDS = ['et', 'md', 'am', 'pk', 'pw', 'cn'];
+
+function delay(milliseconds) {
+  return new Promise(function (resolve) { setTimeout(resolve, milliseconds); });
+}
+
+function probeInfo(address, port, timeoutMs) {
+  return new Promise(function (resolve) {
+    var settled = false;
+    function finish(ready) {
+      if (settled) return;
+      settled = true;
+      resolve(ready);
+    }
+    var request = http.request({
+      host: address,
+      port: port,
+      path: '/info',
+      method: 'GET',
+      headers: { Accept: 'application/x-apple-binary-plist' }
+    }, function (response) {
+      response.resume();
+      finish(response.statusCode === 200);
+    });
+    request.setTimeout(timeoutMs, function () {
+      request.destroy();
+      finish(false);
+    });
+    request.on('error', function () { finish(false); });
+    request.end();
+  });
+}
 
 function AirPlayAdapter(options) {
   options = options || {};
@@ -13,6 +45,8 @@ function AirPlayAdapter(options) {
   this.pluginDir = options.pluginDir || path.resolve(__dirname, '..', '..');
   this.binaryPath = options.binaryPath || '';
   this.mdns = options.mdns || new MdnsDiscovery();
+  this.probeInfo = options.probeInfo || probeInfo;
+  this.delay = options.delay || delay;
 }
 
 AirPlayAdapter.prototype._decodeAvahi = function (value) {
@@ -102,6 +136,7 @@ AirPlayAdapter.prototype.mergeRecords = function (records) {
       device = {
         id: id,
         name: record.txt.name || String(record.serviceName || '').replace(/^[^@]+@/, ''),
+        model: record.txt.model || record.txt.am || '',
         address: record.address,
         addresses: [],
         hostname: record.hostname,
@@ -121,9 +156,11 @@ AirPlayAdapter.prototype.mergeRecords = function (records) {
       if (!device.airplay || record.family === 'IPv4') device.airplay = record;
       if (device.protocols.indexOf('airplay2') === -1) device.protocols.push('airplay2');
       if (record.txt.name) device.name = record.txt.name;
+      if (record.txt.model) device.model = record.txt.model;
     } else {
       if (!device.raop || record.family === 'IPv4') device.raop = record;
       if (device.protocols.indexOf('raop') === -1) device.protocols.push('raop');
+      if (!device.model && record.txt.am) device.model = record.txt.am;
     }
     if (!device.address) device.address = record.address;
   });
@@ -201,7 +238,28 @@ AirPlayAdapter.prototype.getSourceAddress = async function (targetAddress) {
   return match ? match[1] : '';
 };
 
-AirPlayAdapter.prototype.buildSenderArgs = function (receiver, commandPipe, volume, sourceAddress) {
+AirPlayAdapter.prototype.prepareReceiver = async function (receiver, options) {
+  options = options || {};
+  if (!receiver || !receiver.address || !receiver.airplay || !receiver.airplay.port) {
+    throw new Error('A resolved AirPlay 2 receiver is required for readiness checking');
+  }
+  var attempts = options.attempts || 3;
+  var timeoutMs = options.timeoutMs || 4000;
+  var retryDelayMs = options.retryDelayMs || 1000;
+  for (var attempt = 1; attempt <= attempts; attempt += 1) {
+    if (await this.probeInfo(receiver.address, receiver.airplay.port, timeoutMs)) {
+      if (attempt > 1) this.logger.info(receiver.name + ' became ready after wake attempt ' + attempt);
+      await this.delay(options.settleDelayMs === undefined ? 750 : options.settleDelayMs);
+      return { ready: true, attempts: attempt };
+    }
+    if (attempt < attempts) await this.delay(retryDelayMs);
+  }
+  throw new Error((receiver.name || 'The AirPlay receiver') +
+    ' did not make its AirPlay service ready after ' + attempts + ' attempts');
+};
+
+AirPlayAdapter.prototype.buildSenderArgs = function (receiver, commandPipe, volume, sourceAddress, options) {
+  options = options || {};
   if (!receiver || !receiver.address) throw new Error('A resolved AirPlay receiver is required');
   var airplay = receiver.airplay;
   var raop = receiver.raop;
@@ -220,6 +278,14 @@ AirPlayAdapter.prototype.buildSenderArgs = function (receiver, commandPipe, volu
     '--debug', '4'
   ];
   if (sourceAddress) args.push('--if', sourceAddress);
+  if (options.auth) {
+    if (!/^[0-9a-f]{192}$/i.test(options.auth)) throw new Error('Saved AirPlay pairing credentials are invalid');
+    args.push('--auth', options.auth);
+  }
+  if (options.secret) {
+    if (!/^[0-9a-f]{1,64}$/i.test(options.secret)) throw new Error('Saved legacy Apple TV pairing secret is invalid');
+    args.push('--secret', options.secret);
+  }
   if (airplay) {
     args.push('--name', receiver.name, '--hostname', airplay.hostname);
     var txt = Object.keys(airplay.txt).sort().map(function (key) {
