@@ -28,6 +28,25 @@ for sender_binary in "$SCRIPT_DIR"/bin/airplay/cliairplay-*; do
   fi
 done
 
+# Volumio installs plugins from a ZIP archive, which does not reliably preserve
+# executable bits. The mixed armhf/aarch64 AirPlay wrapper invokes this private
+# dynamic loader directly, so it must be executable as well as the wrapper and
+# sender binary above.
+if [ -d "$SCRIPT_DIR/bin/airplay/runtime-arm64" ]; then
+  find "$SCRIPT_DIR/bin/airplay/runtime-arm64" \
+    -type f \
+    -name 'ld-linux-aarch64.so*' \
+    -exec chmod 0755 {} \;
+
+  runtime_library_dir="$SCRIPT_DIR/bin/airplay/runtime-arm64/usr/lib/aarch64-linux-gnu"
+  if [ -f "$runtime_library_dir/libstdc++.so.6.0.30" ]; then
+    ln -sfn libstdc++.so.6.0.30 "$runtime_library_dir/libstdc++.so.6"
+  fi
+  if [ -f "$runtime_library_dir/libatomic.so.1.2.0" ]; then
+    ln -sfn libatomic.so.1.2.0 "$runtime_library_dir/libatomic.so.1"
+  fi
+fi
+
 if command -v bluealsa >/dev/null 2>&1; then
   echo "[$PLUGIN_NAME] Existing BlueALSA sender detected; guarded ALSA output can be enabled after diagnostics"
 

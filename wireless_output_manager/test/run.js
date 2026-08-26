@@ -1,6 +1,7 @@
 'use strict';
 
 var assert = require('assert');
+var fs = require('fs');
 var BluetoothAdapter = require('../lib/adapters/bluetooth');
 var BluetoothVolumeManager = require('../lib/bluetoothVolumeManager');
 var CodecManager = require('../lib/codecManager');
@@ -44,6 +45,13 @@ async function main() {
   assert.strictEqual(uiConfig.sections[0].id, 'currentOutput', 'output and recovery controls must remain first');
   assert.strictEqual(packageConfig.volumio_info.icon, 'fa-share-alt',
     'the plugin icon must represent routing across multiple wireless protocols');
+  var installScript = fs.readFileSync(require.resolve('../install.sh'), 'utf8');
+  assert(/runtime-arm64[\s\S]*ld-linux-aarch64\.so\*[\s\S]*chmod 0755/.test(installScript),
+    'clean installation must restore the private ARM64 loader executable bit after ZIP extraction');
+  assert(/libstdc\+\+\.so\.6\.0\.30[\s\S]*ln -sfn libstdc\+\+\.so\.6\.0\.30/.test(installScript),
+    'clean installation must recreate the private libstdc++ runtime link removed by ZIP extraction');
+  assert(/libatomic\.so\.1\.2\.0[\s\S]*ln -sfn libatomic\.so\.1\.2\.0/.test(installScript),
+    'clean installation must recreate the private libatomic runtime link removed by ZIP extraction');
   assert.strictEqual(controlById('currentOutput', 'currentOutputStatus').element, 'text',
     'current output must use a prominent native text row');
   assert.strictEqual(controlById('currentOutput', 'selectedBluetoothStatus').element, 'text',
