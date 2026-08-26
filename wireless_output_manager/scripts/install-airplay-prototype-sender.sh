@@ -174,6 +174,9 @@ else
   echo "Could not install the verified AirPlay sender; the previous sender was restored" >&2
   exit 1
 fi
+if id volumio >/dev/null 2>&1; then
+  chown volumio:volumio "$BIN_DIR"
+fi
 echo "Prototype sender installed under $TARGET_DIR"
 if [ "$USE_PRIVATE_ARM64_RUNTIME" = "1" ]; then
   echo "The arm64 compatibility files are private to the prototype directory."

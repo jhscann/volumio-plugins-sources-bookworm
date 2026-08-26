@@ -91,6 +91,8 @@ async function main() {
     'sender cleanup must restore the previous runtime if replacement is interrupted');
   assert(/chown -R volumio:volumio/.test(senderInstallerScript),
     'sender installation must preserve uninstall-safe Volumio ownership');
+  assert(/chown volumio:volumio "\$BIN_DIR"/.test(senderInstallerScript),
+    'sender installation must preserve uninstall-safe ownership of its parent bin directory');
   assert.strictEqual(controlById('currentOutput', 'currentOutputStatus').element, 'text',
     'current output must use a prominent native text row');
   assert.strictEqual(controlById('currentOutput', 'selectedBluetoothStatus').element, 'text',
