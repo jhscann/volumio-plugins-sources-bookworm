@@ -390,6 +390,24 @@ async function main() {
   assert(warnings.some(function (message) { return message.indexOf('broken pipe') !== -1; }),
     'a broken AirPlay command pipe must leave a concise diagnostic warning');
 
+  var lossBridge = new AirPlayLiveBridge();
+  lossBridge.session = {
+    receiver: 'Test receiver', id: 'AA:BB', address: '192.168.1.50', sourceAddress: '192.168.1.10'
+  };
+  lossBridge._consumeStatus('stderr', Buffer.from(
+    '[AP2] retransmit: 1536 requested, 1536 resent, 0 already retired\n' +
+    '[AP2] RTSP channel failed during POST /feedback read after 0ms: Connection reset by peer; terminating native session\n' +
+    '[ERROR] AirPlay 2 control channel failed\n'));
+  var lossDiagnostic = lossBridge._recordUnexpectedFailure({ error: new Error('cliairplay exited with code 1') });
+  assert.strictEqual(lossDiagnostic.kind, 'receiver-control-reset');
+  assert.strictEqual(lossDiagnostic.retransmitRequested, 1536);
+  assert.strictEqual(lossDiagnostic.retransmitResent, 1536);
+  assert.strictEqual(lossDiagnostic.receiver, 'Test receiver');
+  assert(/Connection reset by peer/.test(lossDiagnostic.controlFailure),
+    'receiver loss diagnostics must retain the concise control-channel cause');
+  assert.strictEqual(lossBridge.getStatus().lastFailure, lossDiagnostic,
+    'the most recent sender failure must remain available to exported diagnostics');
+
   var commandWrites = [];
   var transitionBridge = new AirPlayLiveBridge();
   transitionBridge.ready = true;
@@ -416,11 +434,17 @@ async function main() {
   assert.strictEqual(commandWrites[2], 'START_UNIX_MS=0\nACTION=START\n');
   transitionBridge._consumeStatus('stdout', Buffer.from('[STATUS] started requested_unix_ms=0\n'));
   await transition;
+  await transitionBridge.updateMetadata({ title: 'Metadata only', artist: 'Artist' });
   await transitionBridge.pause();
   await transitionBridge.resume();
+  await transitionBridge.releasePause();
   await transitionBridge.setVolume(12);
-  assert.deepStrictEqual(commandWrites.slice(-3), ['ACTION=PAUSE\n', 'ACTION=PLAY\n', 'VOLUME=12\n'],
-    'pause and resume must use transport commands without putting the sender into standby');
+  assert(commandWrites[3].indexOf('TITLE=Metadata only\n') === 0 &&
+    commandWrites[3].indexOf('ACTION=SENDMETA\n') !== -1,
+  'a metadata-only track change must not flush or restart the AirPlay stream');
+  assert.deepStrictEqual(commandWrites.slice(-4), [
+    'ACTION=PAUSE\n', 'ACTION=PLAY\n', 'ACTION=PLAY\n', 'VOLUME=12\n'
+  ], 'pause, resume and paused-track hand-off must control the live sender safely');
   assert.throws(function () { transitionBridge.setVolume(101); }, /between 0 and 15%/,
     'live AirPlay volume must remain bounded');
   var now = 1000;
@@ -428,8 +452,10 @@ async function main() {
   var playbackController = new AirPlayPlaybackController({
     bridge: {
       transition: async function (meta) { stateActions.push('transition:' + meta.title); },
+      updateMetadata: async function (meta) { stateActions.push('metadata:' + meta.title); },
       pause: async function () { stateActions.push('pause'); },
       resume: async function () { stateActions.push('resume'); },
+      releasePause: async function () { stateActions.push('release-pause'); },
       getStatus: function () { return { audioStarted: true }; }
     },
     isActive: function () { return true; },
@@ -442,6 +468,9 @@ async function main() {
   await playbackController.handle({
     status: 'play', uri: 'mnt/one.flac', seek: 2100, title: 'One', artist: 'Refined artist'
   });
+  await playbackController.handle({
+    status: 'play', uri: 'music-library/one.flac', seek: 2100, title: 'One', artist: 'Refined artist'
+  });
   await playbackController.handle({ status: 'pause', uri: 'one.flac', seek: 2000, title: 'One' });
   await playbackController.handle({ status: 'play', uri: 'one.flac', seek: 2000, title: 'One' });
   now += 100;
@@ -449,9 +478,14 @@ async function main() {
   now += 100;
   await playbackController.handle({ status: 'play', uri: 'two.flac', seek: 30000, title: 'Two' });
   await playbackController.handle({ status: 'stop', uri: 'two.flac', seek: 30000, title: 'Two' });
+  await playbackController.handle({ status: 'play', uri: 'three.flac', seek: 0, title: 'Three' });
+  await playbackController.handle({ status: 'pause', uri: 'three.flac', seek: 1000, title: 'Three' });
+  await playbackController.handle({ status: 'stop', uri: 'three.flac', seek: 1000, title: 'Three' });
+  await playbackController.handle({ status: 'play', uri: 'four.flac', seek: 0, title: 'Four' });
   assert.deepStrictEqual(stateActions, [
-    'pause', 'resume', 'transition:Two', 'transition:Two'
-  ], 'pause/resume and warm transitions may control the sender without mistaking Volumio URI aliases for new tracks');
+    'pause', 'resume', 'metadata:Two', 'transition:Two', 'metadata:Three',
+    'pause', 'release-pause', 'transition:Four'
+  ], 'natural track changes must remain continuous while paused track replacement is re-anchored');
 
   console.log('AirPlay prototype tests passed');
 }

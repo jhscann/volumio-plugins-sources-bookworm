@@ -3,6 +3,7 @@
 set -u
 
 PLUGIN_NAME="Wireless Output Manager"
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 BLUEALSA_OVERRIDE_DIR="/etc/systemd/system/bluealsa.service.d"
 BLUEALSA_OVERRIDE="$BLUEALSA_OVERRIDE_DIR/50-wireless-output-manager-codecs.conf"
 
@@ -20,6 +21,12 @@ if [ "$missing_required" -ne 0 ]; then
   echo "[$PLUGIN_NAME] Installation cannot continue without the required base-system tools"
   exit 1
 fi
+
+for sender_binary in "$SCRIPT_DIR"/bin/airplay/cliairplay-*; do
+  if [ -f "$sender_binary" ]; then
+    chmod 0755 "$sender_binary"
+  fi
+done
 
 if command -v bluealsa >/dev/null 2>&1; then
   echo "[$PLUGIN_NAME] Existing BlueALSA sender detected; guarded ALSA output can be enabled after diagnostics"

@@ -57,7 +57,57 @@ function AirPlayLiveBridge(options) {
   this.ready = false;
   this.audioStarted = false;
   this.stopping = false;
+  this.session = null;
+  this.transport = this._newTransportDiagnostics();
+  this.lastFailure = null;
 }
+
+AirPlayLiveBridge.prototype._newTransportDiagnostics = function () {
+  return {
+    retransmitRequested: 0,
+    retransmitResent: 0,
+    retransmitRetired: 0,
+    controlFailure: '',
+    lastStatusAt: null
+  };
+};
+
+AirPlayLiveBridge.prototype._recordStatusLine = function (line) {
+  var retransmit = /retransmit:\s+(\d+) requested,\s+(\d+) resent,\s+(\d+) already retired/i.exec(line);
+  if (retransmit) {
+    this.transport.retransmitRequested = Number(retransmit[1]);
+    this.transport.retransmitResent = Number(retransmit[2]);
+    this.transport.retransmitRetired = Number(retransmit[3]);
+  }
+  var controlFailure = /RTSP channel failed during\s+(.+?):\s+(.+?)(?:; terminating|$)/i.exec(line);
+  if (controlFailure) {
+    this.transport.controlFailure = controlFailure[1] + ': ' + controlFailure[2];
+  } else if (/AirPlay 2 control channel failed/i.test(line) && !this.transport.controlFailure) {
+    this.transport.controlFailure = 'AirPlay 2 control channel failed';
+  }
+  if (/\[STATUS\]|\[AP2\]|\[ERROR\]/i.test(line)) this.transport.lastStatusAt = new Date().toISOString();
+};
+
+AirPlayLiveBridge.prototype._recordUnexpectedFailure = function (outcome) {
+  var rawMessage = outcome && outcome.error ? outcome.error.message : 'The AirPlay sender stopped';
+  var peerReset = /connection reset by peer/i.test(this.transport.controlFailure + ' ' + rawMessage);
+  var retransmissions = Number(this.transport.retransmitRequested) || 0;
+  var kind = peerReset ? 'receiver-control-reset'
+    : (retransmissions > 0 ? 'network-or-receiver-loss' : 'sender-exit');
+  this.lastFailure = {
+    occurredAt: new Date().toISOString(),
+    kind: kind,
+    receiver: this.session ? this.session.receiver : null,
+    address: this.session ? this.session.address : '',
+    sourceAddress: this.session ? this.session.sourceAddress : '',
+    retransmitRequested: retransmissions,
+    retransmitResent: Number(this.transport.retransmitResent) || 0,
+    retransmitRetired: Number(this.transport.retransmitRetired) || 0,
+    controlFailure: this.transport.controlFailure,
+    senderError: String(rawMessage).split(/\r?\n/)[0].slice(0, 500)
+  };
+  return this.lastFailure;
+};
 
 AirPlayLiveBridge.prototype._setCommandWriter = function (writer) {
   var self = this;
@@ -91,6 +141,7 @@ AirPlayLiveBridge.prototype._consumeStatus = function (source, chunk) {
   var lines = text.split(/\r?\n/);
   self.statusRemainders[source] = lines.pop();
   lines.forEach(function (line) {
+    self._recordStatusLine(line);
     self.statusWaiters.slice().forEach(function (waiter) {
       var pattern = waiter.patterns ? waiter.patterns[waiter.position] : waiter.pattern;
       if (!pattern.test(line)) return;
@@ -189,12 +240,29 @@ AirPlayLiveBridge.prototype.transition = function (metadata) {
   return operation;
 };
 
+AirPlayLiveBridge.prototype.updateMetadata = function (metadata) {
+  if (!this.ready) throw new Error('The AirPlay session is not ready');
+  this._requireCommand(this._metadataCommands(metadata));
+  return Promise.resolve();
+};
+
 AirPlayLiveBridge.prototype.pause = function () {
   this._requireCommand('ACTION=PAUSE\n');
   return Promise.resolve();
 };
 
 AirPlayLiveBridge.prototype.resume = function () {
+  this._requireCommand('ACTION=PLAY\n');
+  return Promise.resolve();
+};
+
+AirPlayLiveBridge.prototype.releasePause = function () {
+  // Volumio implements Next/Previous as stop followed by play. If the sender
+  // remains paused during that hand-off, MPD can block when it opens the FIFO
+  // for the new track. Resume consumption immediately, but leave flushing and
+  // re-anchoring to transition() once Volumio publishes the replacement play
+  // state. PLAY alone can refill the sender temporarily but does not establish
+  // the new AirPlay timeline after a paused track hand-off.
   this._requireCommand('ACTION=PLAY\n');
   return Promise.resolve();
 };
@@ -288,6 +356,14 @@ AirPlayLiveBridge.prototype.start = async function (receiver, options) {
     self.statusRemainders = { stdout: '', stderr: '' };
     self._rejectStatusWaiters(new Error('The previous AirPlay session ended'));
     self.audioStarted = false;
+    self.transport = self._newTransportDiagnostics();
+    self.session = {
+      receiver: receiver.name || receiver.id || '',
+      id: receiver.id || '',
+      address: receiver.address,
+      sourceAddress: sourceAddress,
+      startedAt: new Date().toISOString()
+    };
     self.child = self.spawn(sender.binary, args, { stdio: [descriptor, 'pipe', 'pipe'] });
     fs.close(descriptor, function () {});
     descriptor = null;
@@ -304,11 +380,16 @@ AirPlayLiveBridge.prototype.start = async function (receiver, options) {
     self.exitPromise = new Promise(function (resolve) {
       self.child.once('error', function (error) { resolve({ error: error }); });
       self.child.once('close', function (code, signal) {
-        var outcome = code === 0 ? { code: code, signal: signal } : {
-          error: new Error('cliairplay exited with code ' + code +
-            (signal ? ' (' + signal + ')' : '') + (self.output.trim() ? ': ' + self.output.trim() : ''))
-        };
         var unexpected = self.ready && !self.stopping;
+        var failurePrefix = 'cliairplay exited with code ' + code + (signal ? ' (' + signal + ')' : '');
+        var outcome = code === 0 ? { code: code, signal: signal } : {
+          // A failed initial connection needs the sender transcript. Once a
+          // session was ready, retain that transcript in getStatus() and keep
+          // the operational error concise so Volumio's journal remains useful.
+          error: new Error(failurePrefix +
+            (!unexpected && self.output.trim() ? ': ' + self.output.trim() : ''))
+        };
+        if (unexpected) outcome.diagnostic = self._recordUnexpectedFailure(outcome);
         self.ready = false;
         self._rejectStatusWaiters(outcome.error || new Error('The AirPlay sender stopped'));
         resolve(outcome);
@@ -390,6 +471,9 @@ AirPlayLiveBridge.prototype.getStatus = function () {
     ready: this.ready,
     audioStarted: this.audioStarted,
     fifo: this.audioFifo,
+    session: this.session,
+    transport: Object.assign({}, this.transport),
+    lastFailure: this.lastFailure,
     output: this.output
   };
 };

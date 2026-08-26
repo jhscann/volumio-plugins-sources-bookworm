@@ -43,6 +43,7 @@ function WirelessOutputManager(context) {
   this.devices = [];
   this.airplayReceivers = [];
   this.airPlayStateCallbackRegistered = false;
+  this.airplayRoutingDown = false;
 }
 
 WirelessOutputManager.prototype.onVolumioStart = function () {
@@ -70,7 +71,7 @@ WirelessOutputManager.prototype.onVolumioStart = function () {
     bridge: this.airplayBridge,
     logger: this.log,
     isActive: function () {
-      return Boolean(this.config && this.config.get('outputEnabled') === true &&
+      return Boolean(!this.airplayRoutingDown && this.config && this.config.get('outputEnabled') === true &&
         this.config.get('activeBackend') === 'airplay' && this.airplayBridge.getStatus().ready);
     }.bind(this)
   });
@@ -92,6 +93,7 @@ WirelessOutputManager.prototype.onVolumioStart = function () {
 
 WirelessOutputManager.prototype.onStart = function () {
   var self = this;
+  self.airplayRoutingDown = false;
   self.log.info('Starting');
   // Volumio 4 validates lifecycle methods using Kew's promise interface.
   // Assimilate the native promise returned by OutputManager into a Kew
@@ -120,6 +122,7 @@ WirelessOutputManager.prototype.onStart = function () {
 WirelessOutputManager.prototype.onStop = function () {
   var self = this;
   self.log.info('Stopping');
+  self.airplayRoutingDown = true;
   self._clearReconnect();
   if (self.airplayPairing) self.airplayPairing.cancel().catch(function () {});
   if (self.airplayPlayback) self.airplayPlayback.reset();
@@ -462,7 +465,11 @@ WirelessOutputManager.prototype._handleUnexpectedAirPlayExit = async function (o
   var self = this;
   if (!self.config || self.config.get('activeBackend') !== 'airplay') return;
   if (self.airplayPlayback) self.airplayPlayback.reset();
-  var detail = outcome && outcome.error ? ': ' + outcome.error.message : '';
+  var diagnostic = outcome && outcome.diagnostic ? outcome.diagnostic : null;
+  var detail = diagnostic
+    ? ': ' + diagnostic.kind + ', retransmissions=' + diagnostic.retransmitRequested +
+      (diagnostic.controlFailure ? ', ' + diagnostic.controlFailure : '')
+    : (outcome && outcome.error ? ': ' + String(outcome.error.message).split(/\r?\n/)[0] : '');
   self.log.warn('AirPlay sender stopped unexpectedly' + detail);
   await self._withRoutingLock(async function () {
     await self._stopPlaybackForRouting().catch(function () {});
@@ -472,7 +479,11 @@ WirelessOutputManager.prototype._handleUnexpectedAirPlayExit = async function (o
     self.config.set('activeBackend', '');
     self.config.set('settingsView', 'overview');
     await self.refreshUI().catch(function () {});
-    self._toast('warning', 'The AirPlay session ended, so playback was stopped and the default audio output was restored.');
+    if (diagnostic && diagnostic.kind === 'receiver-control-reset') {
+      self._toast('warning', 'The AirPlay receiver ended the session after network audio packets were lost. Playback was stopped and the default audio output was restored. Check the receiver and network, then try again.');
+    } else {
+      self._toast('warning', 'The AirPlay session ended, so playback was stopped and the default audio output was restored. Check the receiver and network, then try again.');
+    }
   });
 };
 
@@ -1646,20 +1657,30 @@ WirelessOutputManager.prototype.removeBluetoothOutput = function () {
       await self.refreshUI();
       return { alreadyDefault: true };
     }
-    return self._withRoutingLock(function () { return self._withPreservedSoftwareVolume(function () {
-      return self._stopPlaybackForRouting().then(function () {
-        return self.outputManager.removeOutput();
-      }).then(async function (result) {
-        if (self.airplayBridge) await self.airplayBridge.stop();
+    return self._withRoutingLock(async function () {
+      var leavingAirPlay = self.config.get('activeBackend') === 'airplay' ||
+        Boolean(self.airplayBridge && self.airplayBridge.getStatus().running);
+      if (leavingAirPlay) {
+        self.airplayRoutingDown = true;
         if (self.airplayPlayback) self.airplayPlayback.reset();
-        self.config.set('outputEnabled', false);
-        self.config.set('activeBackend', '');
-        self.config.set('settingsView', 'overview');
+      }
+      try {
+        var result = await self._withPreservedSoftwareVolume(async function () {
+          await self._stopPlaybackForRouting();
+          var removed = await self.outputManager.removeOutput();
+          if (self.airplayBridge) await self.airplayBridge.stop();
+          if (self.airplayPlayback) self.airplayPlayback.reset();
+          self.config.set('outputEnabled', false);
+          self.config.set('activeBackend', '');
+          self.config.set('settingsView', 'overview');
+          return removed;
+        });
+        await self.refreshUI();
         return result;
-      });
-    }).then(function (result) {
-      return self.refreshUI().then(function () { return result; });
-    }); });
+      } finally {
+        self.airplayRoutingDown = false;
+      }
+    });
   }, 'Music will play on the default audio output');
 };
 

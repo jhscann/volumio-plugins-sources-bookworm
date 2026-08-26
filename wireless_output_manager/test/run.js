@@ -750,7 +750,14 @@ async function main() {
   routeState.airPlayRaopCredentials = '{}';
   routeState.outputEnabled = true;
   routeState.activeBackend = 'airplay';
-  await routePlugin._handleUnexpectedAirPlayExit({ error: new Error('network lost') });
+  await routePlugin._handleUnexpectedAirPlayExit({
+    error: new Error('network lost'),
+    diagnostic: {
+      kind: 'receiver-control-reset',
+      retransmitRequested: 1536,
+      controlFailure: 'POST /feedback read: Connection reset by peer'
+    }
+  });
   assert.deepStrictEqual(routeCalls, ['stop', 'rollback', 'stop-sender', 'refresh'],
     'an active sender failure must stop playback and restore the default route');
   assert.strictEqual(routeState.outputEnabled, false);
@@ -1546,8 +1553,13 @@ async function main() {
     getStatus: async function () { return { configured: true, backend: 'airplay' }; },
     removeOutput: async function () { return { removed: true }; }
   };
-  defaultViewPlugin.airplayBridge = { stop: async function () {} };
-  defaultViewPlugin.airplayPlayback = { reset: function () {} };
+  var defaultViewResetCount = 0;
+  var defaultViewStopSawSuppression = false;
+  defaultViewPlugin.airplayBridge = {
+    getStatus: function () { return { running: true }; },
+    stop: async function () { defaultViewStopSawSuppression = defaultViewPlugin.airplayRoutingDown; }
+  };
+  defaultViewPlugin.airplayPlayback = { reset: function () { defaultViewResetCount += 1; } };
   defaultViewPlugin._stopPlaybackForRouting = async function () {};
   defaultViewPlugin._withRoutingLock = async function (operation) { return operation(); };
   defaultViewPlugin._withPreservedSoftwareVolume = async function (operation) { return operation(); };
@@ -1557,6 +1569,11 @@ async function main() {
   assert.strictEqual(defaultViewState.activeBackend, '');
   assert.strictEqual(defaultViewState.settingsView, 'overview',
     'returning to the default output must restore the neutral output chooser');
+  assert(defaultViewResetCount >= 1, 'returning to default must reset AirPlay state before routing changes');
+  assert.strictEqual(defaultViewStopSawSuppression, true,
+    'returning to default must suppress late AirPlay state actions until the sender stops');
+  assert.strictEqual(defaultViewPlugin.airplayRoutingDown, false,
+    'AirPlay state suppression must be released after routing teardown');
   console.log('All tests passed');
 }
 
