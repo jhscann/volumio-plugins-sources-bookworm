@@ -1,6 +1,6 @@
 {
   "name": "wireless_output_manager",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Manage manual Bluetooth and experimental AirPlay audio output routing in Volumio 4",
   "main": "index.js",
   "scripts": {
@@ -20,7 +20,7 @@
     "architectures": ["amd64", "armhf"],
     "os": ["bookworm"],
     "details": "Manually route Volumio to Bluetooth audio devices or an experimental AirPlay receiver.",
-    "changelog": "Adds guarded AirPlay discovery and manual routing on the development branch; preserves the existing Bluetooth workflow.",
+    "changelog": "Adds experimental AirPlay output with guarded discovery, Apple TV pairing, architecture-aware sender installation and manual routing; preserves and extends the Bluetooth workflow.",
     "has_alsa_contribution": true
   },
   "engines": {

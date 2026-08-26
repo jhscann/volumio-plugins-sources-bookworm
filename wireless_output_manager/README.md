@@ -1,6 +1,6 @@
 # Wireless Output Manager
 
-Wireless Output Manager is an experimental Volumio 4 / Bookworm plugin that sends Volumio playback to Bluetooth audio devices. A guarded AirPlay sender is now under active device testing on a separate development branch. Sonos, Chromecast and UPnP/DLNA remain architectural placeholders rather than current features.
+Wireless Output Manager is an experimental Volumio 4 / Bookworm plugin that sends Volumio playback to Bluetooth audio devices and AirPlay receivers. Bluetooth and AirPlay have separate settings views and use explicit manual routing. Sonos, Chromecast and UPnP/DLNA output are not included.
 
 This version is intended for technical preview and community testing. It has not been submitted to the Volumio plugin beta channel.
 
@@ -12,7 +12,9 @@ The current version has been tested on:
 - the existing BlueZ and BlueALSA stack on that device;
 - a JBL PartyBox 100 Bluetooth speaker;
 - manual switching between the JBL speaker and an iFi USB DAC;
-- reconnect, plugin-only reset, reinstall and uninstall workflows.
+- reconnect, plugin-only reset, clean installation, reinstall and uninstall workflows;
+- AirPlay discovery and playback to a Mac, HomePod, Apple TV and another Volumio receiver;
+- architecture-specific AirPlay sender installation on Raspberry Pi 4, Raspberry Pi 5 and x86-64 Volumio systems.
 
 Other Volumio 4 devices, Bluetooth speakers and audio configurations remain untested. The plugin deliberately does not install or replace the system audio stack. LDAC has been validated with Soundcore P31i earbuds, standard aptX with KEF Porsche Design Space One Wireless headphones, and aptX HD with Yamaha YH-E700A headphones.
 
@@ -33,6 +35,11 @@ Other Volumio 4 devices, Bluetooth speakers and audio configurations remain unte
 - bounded A2DP readiness checks, a targeted audio-profile request and at most one selected-device reconnect when BlueZ reports a connection but BlueALSA has no usable audio stream;
 - foreground pairing and routing operations that pause automatic reconnect attempts, preventing competing connection requests;
 - handled Bluetooth command failures that remain inside the plugin instead of restarting the Volumio service process;
+- AirPlay and RAOP receiver discovery without listing the local Volumio receiver;
+- manual AirPlay routing with a warm sender session for pause, resume, seek and track changes;
+- current and legacy Apple TV PIN pairing with credentials stored per receiver and excluded from diagnostics;
+- architecture-aware, checksum-verified installation of the private AirPlay sender on ARMv7, mixed armhf/aarch64 and x86-64 systems;
+- automatic removal of a failed AirPlay route if the receiver or sender disappears.
 
 The plugin does **not** install or replace BlueALSA, PulseAudio or PipeWire and does **not** edit `/etc/mpd.conf` directly. On a compatible BlueALSA installation it adds one plugin-owned systemd drop-in that enables the already-installed LDAC, aptX and aptX HD codecs. The existing service command and profiles are preserved, the result is verified, and a failed change is rolled back.
 
@@ -48,6 +55,10 @@ The plugin does **not** install or replace BlueALSA, PulseAudio or PipeWire and 
 - Bluetooth loudness has two independent controls: BlueALSA's local **Bluetooth stream volume** and the speaker/headphones' own physical volume. The plugin controls the stream volume, not necessarily the physical control on the receiving device.
 - Volumio's native Bluetooth handler may set the main Volumio volume display to 100% when an outgoing A2DP stream starts, even after the plugin restored its previous value during routing. The plugin therefore does not present Volumio software volume as a dependable Bluetooth control. It caps Bluetooth stream volume at 10% whenever Bluetooth routing starts; increase it gradually after playback begins.
 - Codec support depends on both the connected device and the BlueALSA build supplied by the system. The tested Volumio 4 build contains LDAC, aptX and aptX HD but was not compiled with AAC, so this plugin cannot offer AAC without replacing system audio packages. It intentionally does not do that. aptX Adaptive is not provided by BlueALSA 4.3.1 and is not supported by this plugin; compatible headphones may instead offer standard aptX or aptX HD fallback.
+- AirPlay routing is manual and has no automatic fallback. Switching into or out of AirPlay stops playback; press Play after the route changes.
+- AirPlay is buffered by design. Tested receivers typically take about three seconds to pause or resume, while some track changes take approximately nine to ten seconds.
+- AirPlay receiver passwords are not supported. Apple TV PIN pairing is supported, while HomePod normally uses transient authentication when access is allowed for anyone on the same network and no password is required.
+- AirPlay installation requires Internet access so the plugin can download and verify the sender matching the current architecture. If this fails, Bluetooth remains available and the installer reports how to retry.
 
 ## Install from the forum preview branch
 
@@ -67,6 +78,8 @@ Confirm the warning for manually installed, unverified plugins. After installati
 The settings page keeps **Current output and listening safety** and **Troubleshooting** visible at all times. Whenever the page is opened while music uses the default audio output, it starts at a neutral output chooser with buttons for Bluetooth and AirPlay while their detailed sections remain hidden. Opening a view never changes routing, connects a device or starts playback, and status refreshes keep the chosen view open while it is being used. While a wireless output is active, its corresponding controls remain open. Selecting **Return to default audio output** returns the page to the neutral chooser. This layout is designed to accommodate further output types without combining unrelated controls.
 
 During installation, a compatible BlueALSA service is restarted once to enable its existing LDAC, aptX and aptX HD encoders. Only codecs present in the installed BlueALSA build are enabled. Bluetooth devices may disconnect briefly and can then be reconnected normally. SBC remains available. If the requested codecs cannot be verified, the installer restores the previous service configuration and the plugin continues with the codecs already provided by the system.
+
+The installer detects the running architecture and downloads only its matching pinned AirPlay sender: native ARMv7 on a 32-bit Raspberry Pi kernel, ARM64 plus a private compatibility runtime on a 64-bit Raspberry Pi kernel with 32-bit userland, or native x86-64 on Volumio PC. Downloads are checksum-verified and must pass a self-check before use. The sender remains inside the plugin and is not installed system-wide. The ARMv7 binary, licence, third-party notices, checksums and complete corresponding source are published together in the [`wom-airplay-sender-v0.5.2-armv7.1` component release](https://github.com/jhscann/volumio-plugins-sources-bookworm/releases/tag/wom-airplay-sender-v0.5.2-armv7.1).
 
 If BlueZ reports a connection but no Bluetooth audio stream exists, the plugin first waits for the stream to settle, then requests the exact A2DP profile and performs at most one bounded reconnect of the selected device on its owning adapter. It does not restart Bluetooth, change the default adapter or touch unrelated devices.
 
@@ -208,28 +221,7 @@ When reporting a problem, include:
 - the action that failed and the exact message shown;
 - an exported diagnostic report, after reviewing it for any information you do not want to share.
 
-## Future output adapters
-
-The internal adapter boundary allows future AirPlay, Sonos, Chromecast and UPnP/DLNA implementations. Those protocols often use remote stream or queue models rather than ALSA devices, so they will be implemented and tested independently.
-
-## AirPlay development branch
-
-AirPlay discovery and manual output routing are integrated into the isolated `feat/wireless-output-airplay-prototype` branch. This remains an engineering prototype and is not the version linked from the public Bluetooth forum preview. The user-facing Bluetooth workflow remains separate.
-
-For a clean test installation, connect to the Volumio device over SSH and run:
-
-```bash
-cd /tmp
-git clone --branch feat/wireless-output-airplay-prototype --single-branch \
-  https://github.com/jhscann/volumio-plugins-sources-bookworm.git \
-  wireless-output-airplay-test
-cd /tmp/wireless-output-airplay-test/wireless_output_manager
-volumio plugin install
-```
-
-Installation requires Internet access. The plugin detects the running architecture and downloads only the matching pinned AirPlay sender: the verified native ARMv7 build on a 32-bit Raspberry Pi kernel, the upstream ARM64 build on a 64-bit ARM kernel, or the upstream x86-64 build on Volumio PC. Every download is checksum-verified and must pass the sender's self-check before it replaces a previous runtime. The sender remains private to the plugin and is not installed system-wide. If its download or verification fails, plugin installation continues with Bluetooth available and reports the exact retry command.
-
-The ARMv7 build, licence, third-party notices, build manifest, checksums and complete corresponding source are published together in the [`wom-airplay-sender-v0.5.2-armv7.1` development pre-release](https://github.com/jhscann/volumio-plugins-sources-bookworm/releases/tag/wom-airplay-sender-v0.5.2-armv7.1). This component pre-release is not a public plugin release and does not replace the Bluetooth forum preview.
+## AirPlay output
 
 The settings workflow is deliberately manual:
 
@@ -240,7 +232,7 @@ The settings workflow is deliberately manual:
 5. Wait for the ready message, then press Play.
 6. Before selecting Bluetooth or another AirPlay receiver, select **Return to default audio output**.
 
-The receiver is rediscovered before every session, so a changed network address is handled without persisting a stale endpoint. The plugin excludes its own Volumio AirPlay receiver to avoid a feedback loop. Apple TV PIN pairing is supported on this development branch. Current Apple TV models use AirPlay 2 HAP credentials, while Apple TV 1, 2 and 3 models use a separate legacy RAOP secret. The plugin selects the appropriate pairing method from the discovered model and never substitutes one credential type for the other. Pairing credentials are saved per receiver in hidden plugin configuration, are never placed in the UI or diagnostic exports, and are cleared by **Reset plugin setup**. AirPlay receiver passwords are not yet supported. A HomePod configured for **Anyone on the Same Network** without **Require Password** uses automatic transient authentication rather than the Apple TV PIN workflow. Before changing the audio route, the plugin makes bounded readiness checks so a sleeping HomePod has time to wake. A deeply sleeping or otherwise unavailable HomePod may still need a tap on its top before retrying. Saving the AirPlay receiver volume updates a live session immediately; when AirPlay is not active, it becomes the starting receiver volume for the next session. Volumio software-volume changes travel through the buffered audio path and can therefore be noticeably delayed.
+The receiver is rediscovered before every session, so a changed network address is handled without persisting a stale endpoint. The plugin excludes its own Volumio AirPlay receiver to avoid a feedback loop. Current Apple TV models use AirPlay 2 HAP credentials, while Apple TV 1, 2 and 3 models use a separate legacy RAOP secret. The plugin selects the appropriate pairing method from the discovered model and never substitutes one credential type for the other. Pairing credentials are saved per receiver in hidden plugin configuration, are never placed in the UI or diagnostic exports, and are cleared by **Reset plugin setup**. AirPlay receiver passwords are not yet supported. A HomePod configured for **Anyone on the Same Network** without **Require Password** uses automatic transient authentication rather than the Apple TV PIN workflow. Before changing the audio route, the plugin makes bounded readiness checks so a sleeping HomePod has time to wake. A deeply sleeping or otherwise unavailable HomePod may still need a tap on its top before retrying. Saving the AirPlay receiver volume updates a live session immediately; when AirPlay is not active, it becomes the starting receiver volume for the next session. Volumio software-volume changes travel through the buffered audio path and can therefore be noticeably delayed.
 
 AirPlay diagnostics report saved pairing state only for Apple TV receivers. Other receivers are marked **not-required**, rather than incorrectly appearing unpaired. A receiver advertising only RAOP is reported and routed as legacy AirPlay even when its software also has optional AirPlay 2 capabilities.
 
@@ -248,11 +240,11 @@ Switching into or out of AirPlay stops playback and does not resume it automatic
 
 AirPlay has three relevant volume points: Volumio software volume, the AirPlay receiver-volume command sent when the session starts, and the receiver's own output or amplifier level. The saved AirPlay level defaults to 15%. Keep headphones off until all three levels have been checked.
 
-The prototype discovers `_airplay._tcp` and `_raop._tcp` receivers through `avahi-browse` when available, with a built-in mDNS client when Volumio has Avahi running but does not include that optional command. It can send a short, quiet test tone using Music Assistant's GPLv3 `cliairplay` sender. The sender is pinned to version 0.5.2 and verified by a pinned SHA-256 checksum. It remains in the plugin's local `bin/airplay` directory and is not installed system-wide.
+The plugin discovers `_airplay._tcp` and `_raop._tcp` receivers through `avahi-browse` when available, with a built-in mDNS client when Volumio has Avahi running but does not include that optional command. It uses Music Assistant's GPLv3 `cliairplay` sender, pinned to version 0.5.2 and verified by SHA-256 checksum. The sender remains in the plugin's local `bin/airplay` directory and is not installed system-wide.
 
 Volumio 4 on Raspberry Pi can use a 64-bit kernel with a 32-bit `armhf` userland. On that mixed system, the installer downloads checksum-pinned Debian Bookworm arm64 runtime packages and extracts them privately under `bin/airplay/runtime-arm64`. It does not install Debian packages, enable multiarch or change system libraries. A genuinely 32-bit ARM kernel instead receives the tested native ARMv7 hard-float sender. Pi 4, Pi 5 and x86-64 have each completed sender self-check, discovery, real AirPlay routing and Bluetooth regression testing; timing and receiver behaviour can still vary by device and network.
 
-Install the prototype sender in a source checkout:
+Reinstall or verify the AirPlay sender from an installed source checkout:
 
 ```bash
 cd wireless_output_manager
@@ -266,7 +258,7 @@ Discover receivers without changing any audio routing:
 npm run airplay:discover
 ```
 
-After choosing one exact receiver name or id from that output, send a three-second test tone at 5% AirPlay receiver volume:
+For troubleshooting only, choose one exact receiver name or ID from that output and send a three-second test tone at 5% AirPlay receiver volume:
 
 ```bash
 node scripts/airplay-prototype.js tone \
@@ -285,7 +277,7 @@ node scripts/airplay-prototype.js tone \
   --seconds 3
 ```
 
-Keep headphones off until the receiver's actual level is known. The prototype refuses levels above 15%. AirPlay receiver volume is separate from Volumio software volume and any physical amplifier or headphone volume.
+Keep headphones off until the receiver's actual level is known. The diagnostic tone refuses levels above 15%. AirPlay receiver volume is separate from Volumio software volume and any physical amplifier or headphone volume.
 
 The generated signal defaults to only 1% amplitude (`0.01`). If that is inaudible, `--amplitude 0.1` raises the signal to a still-capped 10% while leaving the AirPlay receiver-volume ceiling at 15%. These are independent safety controls.
 
@@ -302,7 +294,7 @@ node scripts/airplay-prototype.js file \
 
 The complete excerpt is decoded into a bounded in-memory PCM buffer before the receiver is contacted. The command refuses excerpts longer than ten seconds and does not enable or reuse Volumio's multiroom FIFO.
 
-The next prototype stage sends the same bounded excerpt through an ALSA `file` PCM and a plugin-owned FIFO before it reaches AirPlay. This exercises the mechanism intended for live Volumio audio without changing the installed plugin or persistent ALSA configuration:
+The ALSA diagnostic sends the same bounded excerpt through an ALSA `file` PCM and a plugin-owned FIFO before it reaches AirPlay. It does not change the installed plugin or persistent ALSA configuration:
 
 ```bash
 node scripts/airplay-alsa-prototype.js \
@@ -313,6 +305,10 @@ node scripts/airplay-alsa-prototype.js \
   --seconds 5
 ```
 
-This stage uses `/tmp/wom-airplay-alsa-prototype` only while it runs. It creates private FIFOs, starts the sender before audio is written, limits connection and shutdown waits, and removes its runtime files afterwards. The development-branch settings workflow uses the same bridge through mutually exclusive Bluetooth and AirPlay ALSA contributions, restores the previous contribution if Volumio's ALSA rebuild or PCM validation fails, and cleans up AirPlay routing during the plugin lifecycle.
+This diagnostic uses `/tmp/wom-airplay-alsa-prototype` only while it runs. It creates private FIFOs, starts the sender before audio is written, limits connection and shutdown waits, and removes its runtime files afterwards. The settings workflow uses the same bridge through mutually exclusive Bluetooth and AirPlay ALSA contributions, restores the previous contribution if Volumio's ALSA rebuild or PCM validation fails, and cleans up AirPlay routing during the plugin lifecycle.
 
-The test requires a receiver on the same discoverable network and free access to the ports required by that receiver. Native AirPlay 2 receivers may use PTP timing on UDP 319 and 320. This prototype does not grant capabilities, open firewall ports, install packages or attempt multi-room playback. The command-line tone and file helpers do not run the settings-page Apple TV pairing workflow; pair Apple TV receivers through the plugin UI.
+The test requires a receiver on the same discoverable network and free access to the ports required by that receiver. Native AirPlay 2 receivers may use PTP timing on UDP 319 and 320. The plugin does not grant capabilities, open firewall ports or attempt multi-room playback. The command-line tone and file helpers do not run the settings-page Apple TV pairing workflow; pair Apple TV receivers through the plugin UI.
+
+## Other output protocols
+
+Sonos, Chromecast and UPnP/DLNA output are not implemented. Volumio currently provides Chromecast and Sonos casting as a Premium feature, so no overlapping implementation is planned without guidance from Volumio.
