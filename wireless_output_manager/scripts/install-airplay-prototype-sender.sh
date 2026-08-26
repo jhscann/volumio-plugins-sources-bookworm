@@ -2,17 +2,30 @@
 
 set -eu
 
-VERSION="v0.5.2"
-BASE_URL="https://github.com/music-assistant/airplay-cli/releases/download/$VERSION"
+UPSTREAM_VERSION="v0.5.2"
+UPSTREAM_BASE_URL="https://github.com/music-assistant/airplay-cli/releases/download/$UPSTREAM_VERSION"
+ARMV7_RELEASE_TAG="wom-airplay-sender-v0.5.2-armv7.1"
+ARMV7_BASE_URL="https://github.com/jhscann/volumio-plugins-sources-bookworm/releases/download/$ARMV7_RELEASE_TAG"
 DEBIAN_URL="https://deb.debian.org/debian"
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-TARGET_DIR="$SCRIPT_DIR/../bin/airplay"
-KERNEL_ARCH="$(uname -m)"
-USERLAND_BITS="$(getconf LONG_BIT 2>/dev/null || true)"
-USERLAND_ARCH="$(dpkg --print-architecture 2>/dev/null || true)"
+PLUGIN_DIR="$SCRIPT_DIR/.."
+BIN_DIR="$PLUGIN_DIR/bin"
+TARGET_DIR="$BIN_DIR/airplay"
+SYSTEM_NAME="${WOM_AIRPLAY_SYSTEM_NAME:-$(uname -s)}"
+KERNEL_ARCH="${WOM_AIRPLAY_KERNEL_ARCH:-$(uname -m)}"
+USERLAND_BITS="${WOM_AIRPLAY_USERLAND_BITS:-$(getconf LONG_BIT 2>/dev/null || true)}"
+USERLAND_ARCH="${WOM_AIRPLAY_USERLAND_ARCH:-$(dpkg --print-architecture 2>/dev/null || true)}"
 USE_PRIVATE_ARM64_RUNTIME=0
+VERSION="$UPSTREAM_VERSION"
+BASE_URL="$UPSTREAM_BASE_URL"
 
-case "$(uname -s)-$KERNEL_ARCH" in
+case "$SYSTEM_NAME-$KERNEL_ARCH" in
+  Linux-armv7l|Linux-armv8l)
+    VERSION="$ARMV7_RELEASE_TAG"
+    BASE_URL="$ARMV7_BASE_URL"
+    ASSET="cliairplay-linux-arm"
+    CHECKSUM="704adb5a10aa1d29c648c1b570184c09bc704ef12cb8d9581156e24dbbca01ce"
+    ;;
   Linux-aarch64|Linux-arm64)
     ASSET="cliairplay-linux-aarch64"
     CHECKSUM="39084fa17e28cd962ef8f295d559301eb37ce191fc390c11a105855c7c68cff0"
@@ -33,13 +46,33 @@ case "$(uname -s)-$KERNEL_ARCH" in
     CHECKSUM="aac1ed1444c64ab90f439c620e0ae83137af60e5ab0d8bdfee7c29eb864ea691"
     ;;
   *)
-    echo "Unsupported prototype platform: $(uname -s) $(uname -m)" >&2
+    echo "Unsupported prototype platform: $SYSTEM_NAME $KERNEL_ARCH" >&2
     exit 1
     ;;
 esac
 
+if [ "${WOM_AIRPLAY_DRY_RUN:-0}" = "1" ]; then
+  printf 'system=%s\nkernel_arch=%s\nuserland_bits=%s\nuserland_arch=%s\nasset=%s\nchecksum=%s\nsource=%s\nprivate_arm64_runtime=%s\n' \
+    "$SYSTEM_NAME" "$KERNEL_ARCH" "$USERLAND_BITS" "$USERLAND_ARCH" \
+    "$ASSET" "$CHECKSUM" "$BASE_URL" "$USE_PRIVATE_ARM64_RUNTIME"
+  exit 0
+fi
+
 TEMP_DIR="$(mktemp -d)"
-trap 'rm -rf "$TEMP_DIR"' EXIT
+INSTALL_STAGING=""
+PREVIOUS_DIR=""
+cleanup() {
+  rm -rf "$TEMP_DIR"
+  [ -z "$INSTALL_STAGING" ] || rm -rf "$INSTALL_STAGING"
+  if [ -n "$PREVIOUS_DIR" ] && [ -e "$PREVIOUS_DIR" ]; then
+    if [ ! -e "$TARGET_DIR" ]; then
+      mv "$PREVIOUS_DIR" "$TARGET_DIR"
+    else
+      rm -rf "$PREVIOUS_DIR"
+    fi
+  fi
+}
+trap cleanup EXIT
 
 checksum_file() {
   if command -v sha256sum >/dev/null 2>&1; then
@@ -115,8 +148,32 @@ EOF
 fi
 
 "$SENDER" --check
-mkdir -p "$TARGET_DIR"
-cp -R "$STAGED_DIR"/. "$TARGET_DIR"/
+mkdir -p "$BIN_DIR"
+INSTALL_STAGING="$BIN_DIR/.airplay-install-$$"
+PREVIOUS_DIR="$BIN_DIR/.airplay-previous-$$"
+mkdir -p "$INSTALL_STAGING"
+cp -R "$STAGED_DIR"/. "$INSTALL_STAGING"/
+
+if id volumio >/dev/null 2>&1; then
+  chown -R volumio:volumio "$INSTALL_STAGING"
+elif [ "$(id -u)" = "0" ]; then
+  target_owner="$(stat -c '%u:%g' "$PLUGIN_DIR" 2>/dev/null || true)"
+  [ -z "$target_owner" ] || chown -R "$target_owner" "$INSTALL_STAGING"
+fi
+
+if [ -e "$TARGET_DIR" ]; then
+  mv "$TARGET_DIR" "$PREVIOUS_DIR"
+fi
+if mv "$INSTALL_STAGING" "$TARGET_DIR"; then
+  INSTALL_STAGING=""
+  rm -rf "$PREVIOUS_DIR"
+  PREVIOUS_DIR=""
+else
+  [ ! -e "$PREVIOUS_DIR" ] || mv "$PREVIOUS_DIR" "$TARGET_DIR"
+  PREVIOUS_DIR=""
+  echo "Could not install the verified AirPlay sender; the previous sender was restored" >&2
+  exit 1
+fi
 echo "Prototype sender installed under $TARGET_DIR"
 if [ "$USE_PRIVATE_ARM64_RUNTIME" = "1" ]; then
   echo "The arm64 compatibility files are private to the prototype directory."

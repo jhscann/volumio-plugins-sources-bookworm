@@ -8,7 +8,7 @@ This version is intended for technical preview and community testing. It has not
 
 The current version has been tested on:
 
-- a Raspberry Pi running Volumio 4 / Bookworm;
+- Raspberry Pi 4, Raspberry Pi 5 and x86-64 PC hardware running Volumio 4 / Bookworm;
 - the existing BlueZ and BlueALSA stack on that device;
 - a JBL PartyBox 100 Bluetooth speaker;
 - manual switching between the JBL speaker and an iFi USB DAC;
@@ -224,12 +224,12 @@ git clone --branch feat/wireless-output-airplay-prototype --single-branch \
   https://github.com/jhscann/volumio-plugins-sources-bookworm.git \
   wireless-output-airplay-test
 cd /tmp/wireless-output-airplay-test/wireless_output_manager
-./scripts/install-airplay-prototype-sender.sh
-npm run airplay:check
 volumio plugin install
 ```
 
-The sender installation step is currently explicit and must succeed before the plugin is installed. It downloads a pinned, checksum-verified upstream release into the source checkout so Volumio includes it when packaging the test installation. It does not install the sender system-wide. A genuinely 32-bit ARM kernel is not supported by the available upstream sender binary.
+Installation requires Internet access. The plugin detects the running architecture and downloads only the matching pinned AirPlay sender: the verified native ARMv7 build on a 32-bit Raspberry Pi kernel, the upstream ARM64 build on a 64-bit ARM kernel, or the upstream x86-64 build on Volumio PC. Every download is checksum-verified and must pass the sender's self-check before it replaces a previous runtime. The sender remains private to the plugin and is not installed system-wide. If its download or verification fails, plugin installation continues with Bluetooth available and reports the exact retry command.
+
+The ARMv7 build, licence, third-party notices, build manifest, checksums and complete corresponding source are published together in the [`wom-airplay-sender-v0.5.2-armv7.1` development pre-release](https://github.com/jhscann/volumio-plugins-sources-bookworm/releases/tag/wom-airplay-sender-v0.5.2-armv7.1). This component pre-release is not a public plugin release and does not replace the Bluetooth forum preview.
 
 The settings workflow is deliberately manual:
 
@@ -248,15 +248,15 @@ Switching into or out of AirPlay stops playback and does not resume it automatic
 
 AirPlay has three relevant volume points: Volumio software volume, the AirPlay receiver-volume command sent when the session starts, and the receiver's own output or amplifier level. The saved AirPlay level defaults to 15%. Keep headphones off until all three levels have been checked.
 
-The prototype discovers `_airplay._tcp` and `_raop._tcp` receivers through `avahi-browse` when available, with a built-in mDNS client when Volumio has Avahi running but does not include that optional command. It can send a short, quiet test tone using Music Assistant's GPLv3 `cliairplay` sender. The sender is pinned to version 0.5.2 and verified by its published SHA-256 checksum. It remains in the plugin's local `bin/airplay` directory and is not installed system-wide.
+The prototype discovers `_airplay._tcp` and `_raop._tcp` receivers through `avahi-browse` when available, with a built-in mDNS client when Volumio has Avahi running but does not include that optional command. It can send a short, quiet test tone using Music Assistant's GPLv3 `cliairplay` sender. The sender is pinned to version 0.5.2 and verified by a pinned SHA-256 checksum. It remains in the plugin's local `bin/airplay` directory and is not installed system-wide.
 
-Volumio 4 on Raspberry Pi can use a 64-bit kernel with a 32-bit `armhf` userland. The upstream sender only publishes a Linux `aarch64` build. On that mixed Pi 4 or Pi 5 system, the installer downloads checksum-pinned Debian Bookworm arm64 runtime packages and extracts them privately under `bin/airplay/runtime-arm64`. It does not install Debian packages, enable multiarch or change system libraries. A genuinely 32-bit-only ARM kernel remains unsupported because it cannot execute the available sender build.
+Volumio 4 on Raspberry Pi can use a 64-bit kernel with a 32-bit `armhf` userland. On that mixed system, the installer downloads checksum-pinned Debian Bookworm arm64 runtime packages and extracts them privately under `bin/airplay/runtime-arm64`. It does not install Debian packages, enable multiarch or change system libraries. A genuinely 32-bit ARM kernel instead receives the tested native ARMv7 hard-float sender. Pi 4, Pi 5 and x86-64 have each completed sender self-check, discovery, real AirPlay routing and Bluetooth regression testing; timing and receiver behaviour can still vary by device and network.
 
 Install the prototype sender in a source checkout:
 
 ```bash
 cd wireless_output_manager
-./scripts/install-airplay-prototype-sender.sh
+/bin/bash ./scripts/install-airplay-prototype-sender.sh
 npm run airplay:check
 ```
 

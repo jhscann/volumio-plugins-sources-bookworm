@@ -1,7 +1,9 @@
 'use strict';
 
 var assert = require('assert');
+var childProcess = require('child_process');
 var fs = require('fs');
+var path = require('path');
 var BluetoothAdapter = require('../lib/adapters/bluetooth');
 var BluetoothVolumeManager = require('../lib/bluetoothVolumeManager');
 var CodecManager = require('../lib/codecManager');
@@ -52,6 +54,43 @@ async function main() {
     'clean installation must recreate the private libstdc++ runtime link removed by ZIP extraction');
   assert(/libatomic\.so\.1\.2\.0[\s\S]*ln -sfn libatomic\.so\.1\.2\.0/.test(installScript),
     'clean installation must recreate the private libatomic runtime link removed by ZIP extraction');
+  assert(/AirPlay sender installation was not completed; Bluetooth remains available/.test(installScript),
+    'an AirPlay download failure must not prevent Bluetooth installation');
+  assert(/chmod 0755 "\$AIRPLAY_INSTALLER"/.test(installScript),
+    'clean installation must restore the sender helper executable bit removed by ZIP extraction');
+  var senderInstaller = path.resolve(__dirname, '../scripts/install-airplay-prototype-sender.sh');
+  function senderPlan(kernelArch, userlandBits, userlandArch) {
+    return childProcess.execFileSync('/bin/bash', [senderInstaller], {
+      encoding: 'utf8',
+      env: Object.assign({}, process.env, {
+        WOM_AIRPLAY_DRY_RUN: '1',
+        WOM_AIRPLAY_SYSTEM_NAME: 'Linux',
+        WOM_AIRPLAY_KERNEL_ARCH: kernelArch,
+        WOM_AIRPLAY_USERLAND_BITS: userlandBits,
+        WOM_AIRPLAY_USERLAND_ARCH: userlandArch
+      })
+    });
+  }
+  var armv7Plan = senderPlan('armv7l', '32', 'armhf');
+  assert(/asset=cliairplay-linux-arm/.test(armv7Plan) &&
+    /checksum=704adb5a10aa1d29c648c1b570184c09bc704ef12cb8d9581156e24dbbca01ce/.test(armv7Plan),
+  'ARMv7 installations must select the verified native sender release');
+  var mixedArmPlan = senderPlan('aarch64', '32', 'armhf');
+  assert(/asset=cliairplay-linux-aarch64/.test(mixedArmPlan) &&
+    /private_arm64_runtime=1/.test(mixedArmPlan),
+  'mixed 64-bit-kernel armhf installations must select ARM64 with a private runtime');
+  var x86Plan = senderPlan('x86_64', '64', 'amd64');
+  assert(/asset=cliairplay-linux-x86_64/.test(x86Plan) &&
+    /private_arm64_runtime=0/.test(x86Plan),
+  'x86-64 installations must select the native x86 sender without the ARM runtime');
+  var senderInstallerScript = fs.readFileSync(senderInstaller, 'utf8');
+  assert(/\.airplay-install-\$\$/.test(senderInstallerScript) &&
+    /\.airplay-previous-\$\$/.test(senderInstallerScript),
+  'sender installation must stage and preserve the previous verified runtime until replacement succeeds');
+  assert(/if \[ ! -e "\$TARGET_DIR" \]; then[\s\S]*mv "\$PREVIOUS_DIR" "\$TARGET_DIR"/.test(senderInstallerScript),
+    'sender cleanup must restore the previous runtime if replacement is interrupted');
+  assert(/chown -R volumio:volumio/.test(senderInstallerScript),
+    'sender installation must preserve uninstall-safe Volumio ownership');
   assert.strictEqual(controlById('currentOutput', 'currentOutputStatus').element, 'text',
     'current output must use a prominent native text row');
   assert.strictEqual(controlById('currentOutput', 'selectedBluetoothStatus').element, 'text',

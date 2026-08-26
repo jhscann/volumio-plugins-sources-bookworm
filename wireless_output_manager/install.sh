@@ -47,6 +47,23 @@ if [ -d "$SCRIPT_DIR/bin/airplay/runtime-arm64" ]; then
   fi
 fi
 
+AIRPLAY_INSTALLER="$SCRIPT_DIR/scripts/install-airplay-prototype-sender.sh"
+AIRPLAY_CHECK="$SCRIPT_DIR/scripts/airplay-prototype.js"
+if [ -f "$AIRPLAY_INSTALLER" ] && [ -f "$AIRPLAY_CHECK" ]; then
+  # Plugin ZIP extraction may remove executable bits from helper scripts. The
+  # installer is invoked through Bash below, but restoring the bit also keeps
+  # the documented manual retry command usable.
+  chmod 0755 "$AIRPLAY_INSTALLER"
+  if node "$AIRPLAY_CHECK" check >/dev/null 2>&1; then
+    echo "[$PLUGIN_NAME] Existing AirPlay sender passed its self-check"
+  elif /bin/bash "$AIRPLAY_INSTALLER"; then
+    echo "[$PLUGIN_NAME] Downloaded and verified the AirPlay sender for this hardware"
+  else
+    echo "[$PLUGIN_NAME] AirPlay sender installation was not completed; Bluetooth remains available"
+    echo "[$PLUGIN_NAME] Retry later with: /bin/bash $AIRPLAY_INSTALLER"
+  fi
+fi
+
 if command -v bluealsa >/dev/null 2>&1; then
   echo "[$PLUGIN_NAME] Existing BlueALSA sender detected; guarded ALSA output can be enabled after diagnostics"
 
