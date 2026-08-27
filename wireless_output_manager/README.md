@@ -309,6 +309,12 @@ This diagnostic uses `/tmp/wom-airplay-alsa-prototype` only while it runs. It cr
 
 The test requires a receiver on the same discoverable network and free access to the ports required by that receiver. Native AirPlay 2 receivers may use PTP timing on UDP 319 and 320. The plugin does not grant capabilities, open firewall ports or attempt multi-room playback. The command-line tone and file helpers do not run the settings-page Apple TV pairing workflow; pair Apple TV receivers through the plugin UI.
 
+## Trademarks and third-party software
+
+AirPlay and Apple TV are trademarks of Apple Inc., registered in the U.S. and other countries and regions. Wireless Output Manager is an independent project and is not affiliated with, endorsed by or sponsored by Apple Inc.
+
+AirPlay sending uses Music Assistant's `cliairplay` under the GNU General Public License version 3. The sender's licence and third-party notices are installed alongside its binary, and the corresponding source and build information are identified above. Wireless Output Manager itself remains separately licensed and communicates with the sender as an external process.
+
 ## Other output protocols
 
 Sonos, Chromecast and UPnP/DLNA output are not implemented. Volumio currently provides Chromecast and Sonos casting as a Premium feature, so no overlapping implementation is planned without guidance from Volumio.
